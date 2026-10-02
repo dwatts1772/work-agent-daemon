@@ -86,7 +86,11 @@ func NewRunner(binaries map[string]string, log *logging.Logger) *Runner {
 // own environment are never passed on: a child only gets a token when the
 // caller supplies one explicitly. git always runs with GIT_TERMINAL_PROMPT=0.
 func (r *Runner) Run(ctx context.Context, bin string, args []string, env ...string) ([]byte, error) {
-	if err := Check(bin, args); err != nil {
+	err := Check(bin, args)
+	if err == nil {
+		err = checkGHToken(bin, args, env)
+	}
+	if err != nil {
 		r.log.Error("exec refused", "bin", bin, "args", args, "err", err)
 		return nil, err
 	}
@@ -112,6 +116,21 @@ func (r *Runner) Run(ctx context.Context, bin string, args []string, env ...stri
 		return stdout.Bytes(), fmt.Errorf("%s %s: %w", bin, strings.Join(args, " "), err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// checkGHToken requires every gh call except `gh auth token` (which fetches
+// the token) to carry an explicit GH_TOKEN, so gh never falls back to its
+// active account.
+func checkGHToken(bin string, args, env []string) error {
+	if bin != "gh" || (len(args) >= 2 && args[0] == "auth" && args[1] == "token") {
+		return nil
+	}
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "GH_TOKEN="); ok && v != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("gh %s: refusing to run without an explicit GH_TOKEN", strings.Join(args, " "))
 }
 
 // tokenVars are stripped from the inherited environment.

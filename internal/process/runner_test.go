@@ -45,6 +45,8 @@ func TestRunRefusesDisallowedCommandsWithoutStartingAProcess(t *testing.T) {
 		{"gh", []string{"pr", "merge", "4"}},
 		{"git", []string{"push", "--force"}},
 		{"git", []string{"push", "origin", "+main"}},
+		{"git", []string{"push", "--force-w"}},
+		{"gh", []string{"api", "-iXPUT", "repos/o/r/pulls/4/merge"}},
 		{"gh", []string{"repo", "delete", "o/r"}},
 	} {
 		if _, err := r.Run(context.Background(), c.bin, c.args); err == nil {
@@ -77,6 +79,20 @@ func TestRunNeverPassesInheritedGitHubTokensToChildren(t *testing.T) {
 	}
 	if calls[1].Env["GH_TOKEN"] != "explicit" {
 		t.Errorf("explicit GH_TOKEN not passed: %+v", calls[1].Env)
+	}
+}
+
+func TestRunRefusesGHCallsThatDoNotCarryAToken(t *testing.T) {
+	r, stubs := newRunner(t)
+	stubs.SetFixture(t, testharness.Fixture{})
+
+	_, err := r.Run(context.Background(), "gh", []string{"issue", "list", "--repo", "o/r"})
+
+	if err == nil || !strings.Contains(err.Error(), "GH_TOKEN") {
+		t.Errorf("err = %v, want refusal naming GH_TOKEN", err)
+	}
+	if calls := stubs.Calls(t); len(calls) != 0 {
+		t.Errorf("tokenless gh call still ran: %+v", calls)
 	}
 }
 

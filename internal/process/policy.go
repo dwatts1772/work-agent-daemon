@@ -6,10 +6,13 @@ import (
 )
 
 // Check reports whether the runner may execute bin with args. The daemon is
-// GitHub-read-mostly: gh is limited to read-only subcommands, git to a small
-// set that excludes anything able to rewrite or delete remote history, and no
-// other binary than gh, git, orca and claude can be run at all. This is what
+// GitHub-read-only: gh is limited to the read commands the daemon uses, git
+// to commands that cannot change any remote (there is no push at all), and
+// no other binary than gh, git, orca and claude can be run. This is what
 // makes "no code path can merge or force push" true by construction.
+//
+// Grow the allowlists only when a feature needs a command, and test the
+// flags that could turn it into a write.
 func Check(bin string, args []string) error {
 	switch bin {
 	case "gh":
@@ -29,10 +32,6 @@ var ghAllowed = map[string]bool{
 	"auth token": true,
 	"api":        true,
 	"issue list": true,
-	"issue view": true,
-	"pr list":    true,
-	"pr view":    true,
-	"pr checks":  true,
 }
 
 func checkGH(args []string) error {
@@ -52,44 +51,89 @@ func checkGH(args []string) error {
 	return nil
 }
 
-// checkGHAPI permits only GET requests. gh api switches to POST implicitly
-// when fields or an input body are given, so those flags are rejected too.
+// ghAPIValueShorts are gh api's short flags that take a value; in a bundle
+// such as -iXPUT the rest of the bundle is that value.
+const ghAPIValueShorts = "XFfHpqt"
+
+// checkGHAPI permits only GET requests to github.com. gh api switches to POST
+// implicitly when fields or an input body are given, so those flags are
+// rejected too. gh (pflag) bundles short flags and does not accept
+// abbreviated long flags.
 func checkGHAPI(args []string) error {
-	for i, a := range args {
-		name, value, hasValue := strings.Cut(a, "=")
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
-		case name == "-X" || name == "--method":
-			if !hasValue {
-				if i+1 >= len(args) {
-					return fmt.Errorf("gh api: %s needs a value", name)
+		case strings.HasPrefix(a, "--"):
+			name, value, hasValue := strings.Cut(a, "=")
+			switch name {
+			case "--method":
+				if !hasValue {
+					i++
+					if i >= len(args) {
+						return fmt.Errorf("gh api: --method needs a value")
+					}
+					value = args[i]
 				}
-				value = args[i+1]
+				if !strings.EqualFold(value, "GET") {
+					return fmt.Errorf("gh api: method %s is not allowed", value)
+				}
+			case "--field", "--raw-field", "--input":
+				return fmt.Errorf("gh api: %s would send a request body", name)
+			case "--hostname":
+				return fmt.Errorf("gh api: --hostname is not allowed")
+			case "--header", "--jq", "--template", "--preview", "--cache":
+				if !hasValue {
+					i++
+				}
 			}
-			if !strings.EqualFold(value, "GET") {
-				return fmt.Errorf("gh api: method %s is not allowed", value)
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			consumedNext, err := checkGHAPIShorts(a[1:], args[i+1:])
+			if err != nil {
+				return err
 			}
-		case strings.HasPrefix(a, "-X"):
-			if !strings.EqualFold(strings.TrimPrefix(a, "-X"), "GET") {
-				return fmt.Errorf("gh api: method %s is not allowed", strings.TrimPrefix(a, "-X"))
+			if consumedNext {
+				i++
 			}
-		case name == "-f" || name == "-F" || name == "--field" || name == "--raw-field" || name == "--input",
-			strings.HasPrefix(a, "-f") && !strings.HasPrefix(a, "--"),
-			strings.HasPrefix(a, "-F"):
-			return fmt.Errorf("gh api: %s would send a request body", name)
 		}
 	}
 	return nil
+}
+
+// checkGHAPIShorts checks one bundle of short flags, reporting whether its
+// last flag took the following argument as its value.
+func checkGHAPIShorts(bundle string, rest []string) (consumedNext bool, err error) {
+	for j, c := range bundle {
+		if !strings.ContainsRune(ghAPIValueShorts, c) {
+			continue
+		}
+		value := bundle[j+1:]
+		if value == "" {
+			if len(rest) == 0 {
+				return false, fmt.Errorf("gh api: -%c needs a value", c)
+			}
+			value, consumedNext = rest[0], true
+		}
+		switch c {
+		case 'X':
+			if !strings.EqualFold(value, "GET") {
+				return false, fmt.Errorf("gh api: method %s is not allowed", value)
+			}
+		case 'f', 'F':
+			return false, fmt.Errorf("gh api: -%c would send a request body", c)
+		}
+		return consumedNext, nil
+	}
+	return false, nil
 }
 
 var gitAllowed = map[string]bool{
 	"fetch":     true,
 	"rev-parse": true,
 	"status":    true,
-	"log":       true,
-	"ls-remote": true,
-	"show-ref":  true,
-	"push":      true,
 }
+
+// gitExecOptions make git run a command of the caller's choosing.
+var gitExecOptions = []string{"--upload-pack", "--receive-pack", "--exec"}
 
 func checkGit(args []string) error {
 	// Only -C <dir> may precede the subcommand; -c could define an alias
@@ -103,28 +147,16 @@ func checkGit(args []string) error {
 	if !gitAllowed[args[0]] {
 		return fmt.Errorf("git %s is not allowlisted", args[0])
 	}
-	if args[0] == "push" {
-		return checkPush(args[1:])
-	}
-	return nil
-}
-
-// checkPush rejects every way git push can overwrite or delete a remote ref.
-func checkPush(args []string) error {
-	for _, a := range args {
+	for _, a := range args[1:] {
 		name, _, _ := strings.Cut(a, "=")
-		switch {
-		case name == "--force", name == "--force-with-lease", name == "--force-if-includes",
-			name == "--mirror", name == "--delete", name == "--prune":
-			return fmt.Errorf("git push %s is not allowed", name)
-		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--"):
-			if strings.ContainsAny(a[1:], "fd") {
-				return fmt.Errorf("git push %s is not allowed", a)
+		// git accepts any unambiguous prefix of a long option.
+		if len(name) <= 2 || !strings.HasPrefix(name, "--") {
+			continue
+		}
+		for _, opt := range gitExecOptions {
+			if strings.HasPrefix(opt, name) {
+				return fmt.Errorf("git %s %s is not allowed", args[0], name)
 			}
-		case strings.HasPrefix(a, "+"):
-			return fmt.Errorf("git push refspec %s would force-update", a)
-		case strings.HasPrefix(a, ":"):
-			return fmt.Errorf("git push refspec %s would delete a ref", a)
 		}
 	}
 	return nil
