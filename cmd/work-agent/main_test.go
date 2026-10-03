@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -809,6 +810,38 @@ func TestPausedItemsTickWithoutTouchingOrcaClaudeOrGit(t *testing.T) {
 	for _, call := range c.stubs.Calls(t)[callsBefore:] {
 		if call.Bin != "gh" {
 			t.Errorf("a Tick with only Paused items ran %s %v", call.Bin, call.Args)
+		}
+	}
+}
+
+func TestTickNotifiesThroughTheConsoleAndJSONLLog(t *testing.T) {
+	fx := world()
+	fx.Orca = nil
+	c := newCLI(t, fx)
+
+	code, _, stderr := c.run(t, "tick")
+
+	if code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "msg=notify kind=orca-unavailable") {
+		t.Errorf("console missing the Orca unavailable notification:\n%s", stderr)
+	}
+	if !strings.Contains(c.logFile(t), `"msg":"notify","kind":"orca-unavailable"`) {
+		t.Errorf("JSONL log missing the Orca unavailable notification:\n%s", c.logFile(t))
+	}
+}
+
+// The headless CLI notifies through the console/JSONL log only: it cannot
+// deliver desktop notifications because it does not link Wails at all.
+func TestTheCLIDoesNotLinkDesktopNotifications(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "github.com/dwatts1772/work-agent-daemon/cmd/work-agent").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, out)
+	}
+	for _, pkg := range strings.Fields(string(out)) {
+		if strings.Contains(pkg, "wailsapp") {
+			t.Errorf("the CLI depends on %s", pkg)
 		}
 	}
 }

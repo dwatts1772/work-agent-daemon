@@ -31,6 +31,9 @@ const (
 	PendingWorkspace ItemState = "PENDING_WORKSPACE"
 	// InProgress is an Owned Issue Woken in its Workspace, with no PR yet.
 	InProgress ItemState = "IN_PROGRESS"
+	// ReadyToMerge is an Owned Issue whose PR has green, Settled CI and no
+	// actionable feedback; the Operator merges it.
+	ReadyToMerge ItemState = "READY_TO_MERGE"
 	// WaitingForCI is an Owned Issue with an open PR linked.
 	WaitingForCI ItemState = "WAITING_FOR_CI"
 	// AddressingFeedback is an Owned Issue Woken for a CI failure on its

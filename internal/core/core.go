@@ -12,6 +12,7 @@ import (
 	"github.com/dwatts1772/work-agent-daemon/internal/config"
 	"github.com/dwatts1772/work-agent-daemon/internal/github"
 	"github.com/dwatts1772/work-agent-daemon/internal/logging"
+	"github.com/dwatts1772/work-agent-daemon/internal/notify"
 	"github.com/dwatts1772/work-agent-daemon/internal/process"
 	"github.com/dwatts1772/work-agent-daemon/internal/state"
 	"github.com/dwatts1772/work-agent-daemon/internal/workflow"
@@ -25,6 +26,9 @@ type Daemon struct {
 	github     *github.Client
 	workspaces workspace.Backend
 	log        *logging.Logger
+	// notifiers always starts with the console/JSONL log.
+	notifiers *notify.Multi
+	once      *notify.Once
 }
 
 // Start resolves the binaries and verifies the Operator. It fails if gh
@@ -44,7 +48,15 @@ func Start(ctx context.Context, cfg config.Config, log *logging.Logger, searchDi
 	if err != nil {
 		return nil, fmt.Errorf("find Claude's config directory: %w", err)
 	}
-	return &Daemon{cfg: cfg, github: gh, workspaces: workspace.NewOrca(runner, claudeDir), log: log}, nil
+	notifiers := &notify.Multi{notify.NewLog(log)}
+	return &Daemon{
+		cfg:        cfg,
+		github:     gh,
+		workspaces: workspace.NewOrca(runner, claudeDir),
+		log:        log,
+		notifiers:  notifiers,
+		once:       notify.NewOnce(notifiers),
+	}, nil
 }
 
 // OrcaAvailable reports whether an Orca runtime is reachable. It is a
@@ -68,8 +80,9 @@ type Result struct {
 }
 
 // Tick observes GitHub, reconciles the Work Items in store against it,
-// carries out the Workspace actions that follow, and saves each outcome as
-// it happens. The caller holds store's lock for the whole Tick.
+// carries out the Workspace actions that follow, saves each outcome as it
+// happens, and notifies the Operator of what now needs their attention.
+// The caller holds store's lock for the whole Tick.
 func (d *Daemon) Tick(ctx context.Context, store *state.Store) (Result, error) {
 	current, err := store.Load()
 	if err != nil {
@@ -90,7 +103,15 @@ func (d *Daemon) Tick(ctx context.Context, store *state.Store) (Result, error) {
 		d.log.Info("action", "action", a.Type, "item", a.Item.ID)
 	}
 	res.Held, err = d.act(ctx, store, next, pending)
-	return res, err
+	if err != nil {
+		return res, err
+	}
+	final, err := store.Load()
+	if err != nil {
+		return res, err
+	}
+	d.notify(ctx, final, len(pending) > 0, res.Held)
+	return res, nil
 }
 
 // DryRun observes GitHub and returns the actions a Tick would take from

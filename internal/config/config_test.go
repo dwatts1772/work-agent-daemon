@@ -103,3 +103,25 @@ func TestLoadReadsACustomEntrySkill(t *testing.T) {
 		t.Errorf("EntrySkill = %q", cfg.Claude.EntrySkill)
 	}
 }
+
+func TestDesktopNotificationsAreOnUnlessDisabled(t *testing.T) {
+	const base = `"github": {"account": "dwatts1772", "repos": ["org/a"], "eligibilityLabel": "agent-ready"}`
+	for _, tc := range []struct {
+		name, notify string
+		want         bool
+	}{
+		{"absent", ``, true},
+		{"enabled", `, "notify": {"desktop": true}`, true},
+		{"disabled", `, "notify": {"desktop": false}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(write(t, `{`+base+tc.notify+`}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.DesktopNotifications(); got != tc.want {
+				t.Errorf("DesktopNotifications() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

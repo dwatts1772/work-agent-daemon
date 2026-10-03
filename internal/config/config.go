@@ -19,6 +19,7 @@ const defaultPollIntervalSeconds = 45
 type Config struct {
 	GitHub GitHub `json:"github"`
 	Claude Claude `json:"claude"`
+	Notify Notify `json:"notify"`
 	// Binaries optionally overrides where gh, git, orca and claude live, for
 	// login items whose minimal PATH cannot find them. Paths must be absolute.
 	Binaries map[string]string `json:"binaries,omitempty"`
@@ -47,6 +48,18 @@ type Claude struct {
 	// EntrySkill is the skill every Wake invokes; it defaults to
 	// DefaultEntrySkill.
 	EntrySkill string `json:"entrySkill"`
+}
+
+type Notify struct {
+	// Desktop turns the tray app's native desktop notifications on or off;
+	// nil means on. The console/JSONL log is always on.
+	Desktop *bool `json:"desktop,omitempty"`
+}
+
+// DesktopNotifications reports whether the tray app delivers native desktop
+// notifications.
+func (c Config) DesktopNotifications() bool {
+	return c.Notify.Desktop == nil || *c.Notify.Desktop
 }
 
 // DefaultEntrySkill is the Entry Skill shipped in this repo.
