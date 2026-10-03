@@ -1,0 +1,5 @@
+node_modules/
+# Built by `npm run build`; only the placeholder that keeps `go build`
+# working without Node is tracked.
+dist/*
+!dist/.gitkeep

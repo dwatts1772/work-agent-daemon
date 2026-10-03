@@ -845,3 +845,65 @@ func TestTheCLIDoesNotLinkDesktopNotifications(t *testing.T) {
 		}
 	}
 }
+
+func TestWakeCarriesOutOneItemsHeldWakeWithoutWaitingForATick(t *testing.T) {
+	fx := world()
+	fx.Orca = nil
+	c := newCLI(t, fx)
+	c.mustTick(t)
+	fx.Orca = orcaRunning()
+	c.stubs.SetFixture(t, fx)
+
+	stdout := c.must(t, "wake", "org/a#1")
+
+	a := c.item(t, "org/a#1")
+	if a.State != workflow.InProgress || a.Workspace == nil || a.HeldWake != nil {
+		t.Errorf("org/a#1 after wake = %s, Workspace %+v, HeldWake %+v; want IN_PROGRESS, created, released", a.State, a.Workspace, a.HeldWake)
+	}
+	if b := c.item(t, "org/b#7"); b.State != workflow.PendingWorkspace || b.HeldWake == nil {
+		t.Errorf("org/b#7 = %s, HeldWake %+v; wake must touch only the item it names", b.State, b.HeldWake)
+	}
+	if got := wakes(t, c); len(got) != 1 || !strings.Contains(got[0], "/work-item issue org/a#1") {
+		t.Errorf("Wakes = %q, want exactly org/a#1's issue Wake", got)
+	}
+	if !strings.Contains(stdout, "org/a#1\tIN_PROGRESS") {
+		t.Errorf("stdout = %q, want the item's new state", stdout)
+	}
+}
+
+func TestWakeHoldsWhileOrcaIsDown(t *testing.T) {
+	fx := world()
+	fx.Orca = nil
+	c := newCLI(t, fx)
+	c.mustTick(t)
+
+	code, _, stderr := c.run(t, "wake", "org/a#1")
+
+	if code == 0 || !strings.Contains(stderr, "Held") {
+		t.Errorf("wake with Orca down: exit %d, stderr %q; want a failure saying the Wake is Held", code, stderr)
+	}
+	if a := c.item(t, "org/a#1"); a.HeldWake == nil || a.HeldWake.Why != workflow.HoldBackendUnavailable {
+		t.Errorf("org/a#1 HeldWake = %+v, want still Held for backend-unavailable", a.HeldWake)
+	}
+}
+
+func TestWakeRefusesItemsThatMustNotBeWoken(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+	c.must(t, "pause", "org/b#7")
+	before := len(wakes(t, c))
+
+	for _, tc := range []struct{ ref, why string }{
+		{"org/a#1", "nothing to Wake"}, // already Woken
+		{"org/b#7", "Paused"},
+		{"org/a#99", "not a tracked Work Item"},
+	} {
+		code, _, stderr := c.run(t, "wake", tc.ref)
+		if code == 0 || !strings.Contains(stderr, tc.why) {
+			t.Errorf("wake %s: exit %d, stderr %q; want a failure saying %q", tc.ref, code, stderr, tc.why)
+		}
+	}
+	if got := len(wakes(t, c)); got != before {
+		t.Errorf("refused wakes still Woke Claude %d times", got-before)
+	}
+}

@@ -219,3 +219,42 @@ func TestPauseAllFailsFastWhileTheCLIHoldsTheLock(t *testing.T) {
 		t.Errorf("PauseAll err = %v, want ErrLocked", err)
 	}
 }
+
+func TestDoRunsAnOperatorCommandBetweenTicksUnderTheLock(t *testing.T) {
+	dir := t.TempDir()
+	seed(t, dir, "org/a#1")
+	ticker := newFakeTicker()
+	loop, _ := startLoop(t, dir, time.Hour, ticker, nil)
+	ticker.waitTick(t)
+
+	err := loop.Do(context.Background(), func(store *state.Store) error {
+		if _, err := state.Open(dir); !errors.Is(err, state.ErrLocked) {
+			t.Errorf("the state directory is not locked during Do: %v", err)
+		}
+		_, err := Pause(store, "org/a#1")
+		return err
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := state.Read(dir); st.Items[0].State != workflow.Paused {
+		t.Errorf("org/a#1 is %s after Do paused it", st.Items[0].State)
+	}
+}
+
+func TestDoFailsFastWhileTheCLIHoldsTheLock(t *testing.T) {
+	dir := t.TempDir()
+	seed(t, dir, "org/a#1")
+	cli, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	loop, _ := startLoop(t, dir, time.Hour, newFakeTicker(), nil)
+	ran := false
+	err = loop.Do(context.Background(), func(*state.Store) error { ran = true; return nil })
+	if !errors.Is(err, state.ErrLocked) || ran {
+		t.Errorf("Do err = %v, ran = %v; want ErrLocked without running", err, ran)
+	}
+}

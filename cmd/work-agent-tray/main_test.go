@@ -19,11 +19,18 @@ const (
 
 func configFor(t *testing.T) string {
 	t.Helper()
-	stubs := testharness.New(t)
-	stubs.SetFixture(t, testharness.Fixture{
+	path, _ := configWith(t, testharness.Fixture{
 		Tokens: map[string]string{operator: token},
 		Users:  map[string]string{token: operator},
 	})
+	return path
+}
+
+// configWith writes a config whose binaries are stubs simulating fx.
+func configWith(t *testing.T, fx testharness.Fixture) (string, *testharness.Stubs) {
+	t.Helper()
+	stubs := testharness.New(t)
+	stubs.SetFixture(t, fx)
 	data, _ := json.Marshal(map[string]any{
 		"github":   map[string]any{"account": operator, "repos": []string{"org/a"}, "eligibilityLabel": "agent-ready"},
 		"binaries": stubs.Paths,
@@ -32,7 +39,7 @@ func configFor(t *testing.T) string {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	return path, stubs
 }
 
 func TestASecondInstanceRefusesToStart(t *testing.T) {
