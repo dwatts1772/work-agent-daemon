@@ -207,7 +207,7 @@ WAITING_FOR_CI    → ADDRESSING_FEEDBACK  CI Settled with failure (Woken)
 WAITING_FOR_CI    → WAITING_FOR_REVIEW   CI Settled green, feedback outstanding / change request standing
 WAITING_FOR_CI    → READY_TO_MERGE       CI Settled green, no actionable feedback
 WAITING_FOR_REVIEW→ ADDRESSING_FEEDBACK  actionable feedback (Woken)
-WAITING_FOR_REVIEW→ READY_TO_MERGE       feedback addressed, no change request standing, CI green
+WAITING_FOR_REVIEW→ READY_TO_MERGE       CI Settled green, no actionable feedback, no change request standing
 ADDRESSING_FEEDBACK → WAITING_FOR_CI     head SHA changed
 READY_TO_MERGE    → WAITING_FOR_CI       head SHA changed
 any               → DONE                 PR merged or closed / issue closed

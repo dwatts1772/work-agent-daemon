@@ -40,8 +40,8 @@ type Feedback struct {
 // bots count, and never the Operator, whose account Claude itself comments
 // as. A submitted review counts when it comments or requests changes; a
 // comment counts when it says something outside quoted text and code
-// fences. A change request stands while it is a counted author's latest
-// approval, change request or dismissal. No approval is ever required (#37).
+// fences. A change request stands while it is the latest verdict (approval,
+// change request or dismissal) of a counted author.
 func Triage(operator string, bots []string, reviews []Review, comments []Comment) (feedback []Feedback, changesRequested bool) {
 	allowed := func(author, association string) bool {
 		if strings.EqualFold(author, operator) {

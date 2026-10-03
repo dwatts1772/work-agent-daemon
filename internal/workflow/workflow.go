@@ -294,7 +294,7 @@ type Event struct {
 	Failed  bool
 	// Feedback is every review and comment on the PR that counts as
 	// feedback; ChangesRequested is whether a reviewer's change request
-	// still stands. No approval is needed (#37).
+	// still stands.
 	Feedback         []Feedback
 	ChangesRequested bool
 	// QuietPeriod is how long comments must go quiet before the daemon Wakes
