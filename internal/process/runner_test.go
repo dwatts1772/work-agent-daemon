@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -222,5 +223,29 @@ func TestResolveBinariesNeverPicksOrcaCmdOnWindows(t *testing.T) {
 	_, err = process.ResolveBinaries(map[string]string{"orca": filepath.Join(shimDir, "orca.cmd")}, nil)
 	if err == nil {
 		t.Error("accepted an orca.cmd override")
+	}
+}
+
+// A login item gets a minimal PATH, so a child that itself looks something
+// up on PATH (an npm shim's `env node`, gh running git) must still find the
+// other resolved binaries' directories there.
+func TestRunPutsTheResolvedBinariesDirectoriesOnTheChildsPath(t *testing.T) {
+	minimal := t.TempDir()
+	t.Setenv("PATH", minimal)
+	gitDir, claudeDir := testharness.New(t), testharness.New(t)
+	r := process.NewRunner(map[string]string{"git": gitDir.Paths["git"], "claude": claudeDir.Paths["claude"]}, logging.New(io.Discard, io.Discard))
+
+	if _, err := r.Run(context.Background(), "git", []string{"status"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := filepath.SplitList(gitDir.Calls(t)[0].Env["PATH"])
+	for _, want := range []string{minimal, gitDir.Dir, claudeDir.Dir} {
+		if !slices.Contains(got, want) {
+			t.Errorf("child PATH %q lacks %s", got, want)
+		}
+	}
+	if got[0] != minimal {
+		t.Errorf("child PATH %q must keep the inherited PATH first", got)
 	}
 }

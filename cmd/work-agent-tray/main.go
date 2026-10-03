@@ -47,7 +47,7 @@ func run() int {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	t, err := prepare(ctx, *configPath)
+	t, err := prepare(ctx, *configPath, process.DefaultSearchDirs())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "work-agent-tray: refusing to start:", err)
 		return 1
@@ -63,24 +63,30 @@ func run() int {
 // tray is a started, single-instance tray app that has not yet shown its
 // icon.
 type tray struct {
-	daemon   *core.Daemon
-	cfg      config.Config
-	stateDir string
-	log      *logging.Logger
-	closers  []io.Closer
+	daemon     *core.Daemon
+	cfg        config.Config
+	configPath string // absolute
+	stateDir   string
+	log        *logging.Logger
+	closers    []io.Closer
 }
 
 // prepare makes this the only tray app instance for the config's state
 // directory, then loads the config and starts the core. It fails with
-// state.ErrAlreadyRunning when another instance is running.
-func prepare(ctx context.Context, configPath string) (t *tray, err error) {
+// state.ErrAlreadyRunning when another instance is running. Binaries that are
+// not configured are looked up on PATH, then in searchDirs.
+func prepare(ctx context.Context, configPath string, searchDirs []string) (t *tray, err error) {
+	configPath, err = filepath.Abs(configPath)
+	if err != nil {
+		return nil, err
+	}
 	// The state directory holds config.json, state.json and logs/.
 	stateDir := filepath.Dir(configPath)
 	instance, err := state.LockInstance(stateDir)
 	if err != nil {
 		return nil, err
 	}
-	t = &tray{stateDir: stateDir, closers: []io.Closer{instance}}
+	t = &tray{configPath: configPath, stateDir: stateDir, closers: []io.Closer{instance}}
 	defer func() {
 		if err != nil {
 			t.close()
@@ -99,7 +105,7 @@ func prepare(ctx context.Context, configPath string) (t *tray, err error) {
 		t.log.Error("refusing to start", "err", err)
 		return nil, err
 	}
-	t.daemon, err = core.Start(ctx, t.cfg, t.log, process.DefaultSearchDirs())
+	t.daemon, err = core.Start(ctx, t.cfg, t.log, searchDirs)
 	if err != nil {
 		t.log.Error("refusing to start", "err", err)
 		return nil, errors.New(t.log.Redact(err.Error()))
@@ -177,6 +183,7 @@ func (t *tray) serve(ctx context.Context) error {
 		}()
 	})
 	menu.Add("Tick now").OnClick(func(*application.Context) { loop.TickNow() })
+	t.addStartAtLogin(menu, app.Autostart)
 	menu.AddSeparator()
 	menu.Add("Quit").OnClick(func(*application.Context) { app.Quit() })
 	icon.SetMenu(menu)
