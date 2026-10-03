@@ -90,14 +90,17 @@ func (d *Daemon) DryRun(ctx context.Context, current workflow.State) (Result, er
 
 // reconcile observes GitHub and applies what it saw to current, returning
 // the new state, how many Eligible issues were seen, and the actions taken.
+// observe sees every allowlisted repo, so a tracked Owned Issue it does not
+// report is no longer Eligible.
 func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflow.State, int, []workflow.Action, error) {
-	events, err := d.observe(ctx)
+	assigned, err := d.observe(ctx)
 	if err != nil {
 		return workflow.State{}, 0, nil, err
 	}
+	events := append(assigned, workflow.Ineligible(current, assigned, time.Now().UTC())...)
 	next, actions := workflow.Reconcile(current, events)
-	d.log.Info("tick", "eligible", len(events), "actions", len(actions))
-	return next, len(events), actions, nil
+	d.log.Info("tick", "eligible", len(assigned), "actions", len(actions))
+	return next, len(assigned), actions, nil
 }
 
 // act carries out the pending Workspace actions against Orca, saving after

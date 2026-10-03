@@ -16,27 +16,53 @@ import (
 	"github.com/dwatts1772/work-agent-daemon/internal/state"
 )
 
-const usage = `usage: work-agent tick [--dry-run] [--config path]`
+const usage = `usage:
+  work-agent tick [--dry-run] [--config path]
+  work-agent list [--config path]
+  work-agent inspect <owner/name>#<n> [--config path]
+  work-agent pause <owner/name>#<n> [--config path]
+  work-agent resume <owner/name>#<n> [--config path]`
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "tick" {
+	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2
 	}
+	switch args[0] {
+	case "tick":
+		return runTick(args[1:], stdout, stderr)
+	case "list":
+		return runList(args[1:], stdout, stderr)
+	case "inspect", "pause", "resume":
+		return runItem(args[0], args[1:], stdout, stderr)
+	}
+	fmt.Fprintln(stderr, usage)
+	return 2
+}
+
+// flags returns a flag set for cmd with the shared --config flag.
+func flags(cmd string, stderr io.Writer) (*flag.FlagSet, *string, error) {
 	defaultConfig, err := config.DefaultPath()
+	if err != nil {
+		return nil, nil, err
+	}
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	return fs, fs.String("config", defaultConfig, "path to config.json"), nil
+}
+
+func runTick(args []string, stdout, stderr io.Writer) int {
+	fs, configPath, err := flags("tick", stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "work-agent:", err)
 		return 1
 	}
-	fs := flag.NewFlagSet("tick", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	configPath := fs.String("config", defaultConfig, "path to config.json")
 	dryRun := fs.Bool("dry-run", false, "observe GitHub and print the actions a Tick would take, writing nothing")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
@@ -94,16 +120,15 @@ func tick(stdout, stderr io.Writer, log *logging.Logger, cfg config.Config, act 
 }
 
 func printResult(w io.Writer, res core.Result) {
-	if len(res.Actions) == 0 {
-		if res.Eligible == 0 {
-			fmt.Fprintln(w, "No Eligible issues.")
-		} else {
-			fmt.Fprintf(w, "No changes: %d Eligible issues, all already Owned Issues.\n", res.Eligible)
-		}
-		return
-	}
 	for _, a := range res.Actions {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", a.Type, a.Item.ID, a.Item.State, a.Item.Title, a.Item.IssueURL)
+	}
+	switch {
+	case len(res.Actions) > 0:
+	case res.Eligible == 0:
+		fmt.Fprintln(w, "No Eligible issues.")
+	default:
+		fmt.Fprintf(w, "No changes: %d Eligible issues, all already Owned Issues.\n", res.Eligible)
 	}
 	if res.Held {
 		fmt.Fprintln(w, "Held: Orca is unavailable; Workspace actions will be retried on the next Tick. Start Orca to continue.")

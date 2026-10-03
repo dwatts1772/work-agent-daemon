@@ -597,3 +597,216 @@ func TestRepeatedWorkspaceCreationFailuresMoveTheItemToFailed(t *testing.T) {
 		}
 	}
 }
+
+func (c *cli) item(t *testing.T, id string) workflow.WorkItem {
+	t.Helper()
+	for _, w := range c.savedState(t).Items {
+		if w.ID == id {
+			return w
+		}
+	}
+	t.Fatalf("%s is not tracked", id)
+	return workflow.WorkItem{}
+}
+
+func TestRemovingTheEligibilityLabelPausesAndReAddingResumes(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+
+	fx := world()
+	fx.Issues["org/a"][0].Labels = []string{"bug"}
+	c.stubs.SetFixture(t, fx)
+	stdout := c.mustTick(t)
+
+	if got := c.item(t, "org/a#1").State; got != workflow.Paused {
+		t.Fatalf("after removing the label, org/a#1 is %s, want PAUSED", got)
+	}
+	if got := c.item(t, "org/b#7").State; got != workflow.InProgress {
+		t.Errorf("org/b#7 is %s; only the item that lost Eligibility should pause", got)
+	}
+	if !strings.Contains(stdout, "PAUSE\torg/a#1") {
+		t.Errorf("stdout does not report the pause:\n%s", stdout)
+	}
+
+	c.stubs.SetFixture(t, world())
+	stdout = c.mustTick(t)
+
+	if got := c.item(t, "org/a#1").State; got != workflow.InProgress {
+		t.Fatalf("after re-adding the label, org/a#1 is %s, want its pre-pause IN_PROGRESS", got)
+	}
+	if !strings.Contains(stdout, "RESUME\torg/a#1") {
+		t.Errorf("stdout does not report the resume:\n%s", stdout)
+	}
+	if got := itemIDs(c.savedState(t)); !slices.Equal(got, []string{"org/a#1", "org/b#7"}) {
+		t.Errorf("Owned Issues = %v; pausing must delete or duplicate nothing", got)
+	}
+}
+
+func TestReassigningAwayFromTheOperatorPauses(t *testing.T) {
+	fx := world()
+	fx.Issues = map[string][]testharness.Issue{"org/a": fx.Issues["org/a"][:1]}
+	c := newCLI(t, fx)
+	c.mustTick(t)
+
+	fx.Issues["org/a"][0].Assignees = []string{"other"}
+	c.stubs.SetFixture(t, fx)
+	stdout := c.mustTick(t)
+
+	if got := c.item(t, "org/a#1").State; got != workflow.Paused {
+		t.Fatalf("after reassigning away, org/a#1 is %s, want PAUSED", got)
+	}
+	if !strings.Contains(stdout, "PAUSE\torg/a#1") {
+		t.Errorf("stdout does not report the pause:\n%s", stdout)
+	}
+
+	fx.Issues["org/a"][0].Assignees = []string{operator}
+	c.stubs.SetFixture(t, fx)
+	c.mustTick(t)
+
+	if got := c.item(t, "org/a#1").State; got != workflow.InProgress {
+		t.Errorf("after reassigning back, org/a#1 is %s, want its pre-pause IN_PROGRESS", got)
+	}
+}
+
+func (c *cli) must(t *testing.T, args ...string) string {
+	t.Helper()
+	code, stdout, stderr := c.run(t, args...)
+	if code != 0 {
+		t.Fatalf("%v: exit %d, stderr:\n%s", args, code, stderr)
+	}
+	return stdout
+}
+
+func TestOperatorPauseHoldsAcrossTicksUntilResumed(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+	callsBefore := len(c.stubs.Calls(t))
+
+	c.must(t, "pause", "org/a#1")
+
+	if got := len(c.stubs.Calls(t)); got != callsBefore {
+		t.Errorf("pause ran %d external commands; it must be local", got-callsBefore)
+	}
+	if got := c.item(t, "org/a#1").State; got != workflow.Paused {
+		t.Fatalf("after pause, org/a#1 is %s, want PAUSED", got)
+	}
+
+	c.mustTick(t)
+	if got := c.item(t, "org/a#1").State; got != workflow.Paused {
+		t.Fatalf("a Tick resumed an Operator-paused item: %s", got)
+	}
+
+	c.must(t, "resume", "org/a#1")
+	if got := c.item(t, "org/a#1").State; got != workflow.InProgress {
+		t.Errorf("after resume, org/a#1 is %s, want its pre-pause IN_PROGRESS", got)
+	}
+}
+
+func TestResumeLeavesAnItemThatIsNotEligiblePaused(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+	c.must(t, "pause", "org/a#1")
+	fx := world()
+	fx.Issues["org/a"][0].Labels = nil
+	c.stubs.SetFixture(t, fx)
+	c.mustTick(t)
+
+	// Re-adding the label alone does not undo the Operator's pause.
+	c.stubs.SetFixture(t, world())
+	c.mustTick(t)
+	if got := c.item(t, "org/a#1").State; got != workflow.Paused {
+		t.Fatalf("regaining Eligibility undid the Operator's pause: %s", got)
+	}
+
+	c.stubs.SetFixture(t, fx)
+	c.mustTick(t)
+	code, _, stderr := c.run(t, "resume", "org/a#1")
+
+	if code == 0 {
+		t.Error("resume of an item that is not Eligible exited 0")
+	}
+	if !strings.Contains(stderr, "not Eligible") {
+		t.Errorf("stderr should say why it is still Paused:\n%s", stderr)
+	}
+	if got := c.item(t, "org/a#1").State; got != workflow.Paused {
+		t.Errorf("org/a#1 is %s; an item that is not Eligible must stay PAUSED", got)
+	}
+
+	c.stubs.SetFixture(t, world())
+	c.mustTick(t)
+	if got := c.item(t, "org/a#1").State; got != workflow.InProgress {
+		t.Errorf("once Eligible again after resume, org/a#1 is %s, want its pre-pause IN_PROGRESS", got)
+	}
+}
+
+func TestPauseAndResumeRejectUnknownOrMalformedRefs(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+	for _, args := range [][]string{
+		{"pause", "org/a#99"}, {"resume", "org/a#99"}, {"pause", "org/a"}, {"pause"}, {"inspect", "org/a#99"},
+	} {
+		if code, _, _ := c.run(t, args...); code == 0 {
+			t.Errorf("%v exited 0", args)
+		}
+	}
+}
+
+func TestListAndInspectShowPausedItemsAndWhy(t *testing.T) {
+	c := newCLI(t, world())
+	if out := c.must(t, "list"); !strings.Contains(out, "No Work Items") {
+		t.Errorf("list before any Tick:\n%s", out)
+	}
+	c.mustTick(t)
+	c.must(t, "pause", "org/b#7")
+	fx := world()
+	fx.Issues["org/a"][0].Labels = nil
+	c.stubs.SetFixture(t, fx)
+	c.mustTick(t)
+	callsBefore := len(c.stubs.Calls(t))
+
+	list := c.must(t, "list")
+
+	for _, want := range []string{
+		"org/a#1\tPAUSED\tnot Eligible\tEligible in a",
+		"org/b#7\tPAUSED\tpaused by Operator\tEligible in b",
+	} {
+		if !strings.Contains(list, want) {
+			t.Errorf("list missing %q:\n%s", want, list)
+		}
+	}
+
+	out := c.must(t, "inspect", "org/a#1")
+	var w workflow.WorkItem
+	if err := json.Unmarshal([]byte(out), &w); err != nil {
+		t.Fatalf("inspect output is not a Work Item: %v\n%s", err, out)
+	}
+	if w.ID != "org/a#1" || w.State != workflow.Paused || w.Pause == nil || !w.Pause.NotEligible || w.Pause.ResumeTo != workflow.InProgress {
+		t.Errorf("inspect = %+v, want org/a#1 PAUSED, not Eligible, resuming to IN_PROGRESS", w)
+	}
+	if got := len(c.stubs.Calls(t)); got != callsBefore {
+		t.Errorf("list/inspect ran %d external commands; they must be local", got-callsBefore)
+	}
+}
+
+// Both items are Paused while still PENDING_WORKSPACE (Orca was down on the
+// first Tick), so with Orca back they must still get no Workspace or Wake.
+func TestPausedItemsTickWithoutTouchingOrcaClaudeOrGit(t *testing.T) {
+	fx := world()
+	fx.Orca = nil
+	c := newCLI(t, fx)
+	c.mustTick(t)
+	c.must(t, "pause", "org/a#1")
+	fx = world()
+	fx.Issues["org/b"] = nil
+	c.stubs.SetFixture(t, fx)
+	callsBefore := len(c.stubs.Calls(t))
+
+	c.mustTick(t)
+	c.mustTick(t)
+
+	for _, call := range c.stubs.Calls(t)[callsBefore:] {
+		if call.Bin != "gh" {
+			t.Errorf("a Tick with only Paused items ran %s %v", call.Bin, call.Args)
+		}
+	}
+}
