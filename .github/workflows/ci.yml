@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-vet-test:
+    name: build-vet-test (${{ matrix.os }})
+    strategy:
+      # Run every OS leg to completion so a failure on one does not hide the other.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          # go.mod pins `go 1.26`; read it from there so the two cannot drift.
+          go-version-file: go.mod
+          # Caches GOMODCACHE and GOCACHE. There is no go.sum (no third-party
+          # dependencies yet), so key the cache on go.mod instead.
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
