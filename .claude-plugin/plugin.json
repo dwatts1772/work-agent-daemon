@@ -1,0 +1,5 @@
+{
+  "name": "work-agent",
+  "description": "Entry Skill /work-item for the work-agent daemon: routes each Wake to the right workflow under a draft-only, never-force push policy.",
+  "repository": "https://github.com/dwatts1772/work-agent-daemon"
+}
