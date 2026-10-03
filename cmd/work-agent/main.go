@@ -130,6 +130,9 @@ func printResult(w io.Writer, res core.Result) {
 	default:
 		fmt.Fprintf(w, "No changes: %d Eligible issues, all already Owned Issues.\n", res.Eligible)
 	}
+	if res.Held {
+		fmt.Fprintln(w, "Held: Orca is unavailable; Workspace actions will be retried on the next Tick. Start Orca to continue.")
+	}
 }
 
 // openLog opens the JSONL log in the logs/ directory of the state directory.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -13,6 +14,7 @@ import (
 // keys are ignored so the file can carry settings for later features.
 type Config struct {
 	GitHub GitHub `json:"github"`
+	Claude Claude `json:"claude"`
 	// Binaries optionally overrides where gh, git, orca and claude live, for
 	// login items whose minimal PATH cannot find them. Paths must be absolute.
 	Binaries map[string]string `json:"binaries,omitempty"`
@@ -25,6 +27,19 @@ type GitHub struct {
 	Repos            []string `json:"repos"`
 	EligibilityLabel string   `json:"eligibilityLabel"`
 }
+
+type Claude struct {
+	// EntrySkill is the skill every Wake invokes; it defaults to
+	// DefaultEntrySkill.
+	EntrySkill string `json:"entrySkill"`
+}
+
+// DefaultEntrySkill is the Entry Skill shipped in this repo.
+const DefaultEntrySkill = "/work-item"
+
+// entrySkillPattern keeps the Entry Skill one shell-inert word, because it
+// is typed into the Workspace terminal as part of the Wake command.
+var entrySkillPattern = regexp.MustCompile(`^/?[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 
 // DefaultPath is ~/.work-agent/config.json.
 func DefaultPath() (string, error) {
@@ -44,6 +59,9 @@ func Load(path string) (Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if cfg.Claude.EntrySkill == "" {
+		cfg.Claude.EntrySkill = DefaultEntrySkill
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid config %s: %w", path, err)
@@ -66,6 +84,9 @@ func (c Config) validate() error {
 	}
 	if c.GitHub.EligibilityLabel == "" {
 		return fmt.Errorf("github.eligibilityLabel is required")
+	}
+	if !entrySkillPattern.MatchString(c.Claude.EntrySkill) {
+		return fmt.Errorf("claude.entrySkill %q must be a single skill name such as %s", c.Claude.EntrySkill, DefaultEntrySkill)
 	}
 	for name, path := range c.Binaries {
 		switch name {

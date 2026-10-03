@@ -1,6 +1,6 @@
 // Package workspace defines the WorkspaceBackend seam the daemon uses to
-// create and Wake Workspaces. Orca will implement it; until then only Fake
-// does.
+// create and Wake Workspaces. Orca implements it; Fake is an in-memory
+// stand-in for tests.
 package workspace
 
 import "context"

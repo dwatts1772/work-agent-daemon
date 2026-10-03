@@ -87,6 +87,23 @@ func (s *Stubs) SetFixture(t *testing.T, fx Fixture) {
 	}
 }
 
+// OrcaWorktrees returns the worktrees the stub orca has created, in order.
+func (s *Stubs) OrcaWorktrees(t *testing.T) []OrcaWorktree {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(s.Dir, OrcaWorktreesFile))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wts []OrcaWorktree
+	if err := json.Unmarshal(data, &wts); err != nil {
+		t.Fatal(err)
+	}
+	return wts
+}
+
 // Calls returns every stub invocation so far, in order.
 func (s *Stubs) Calls(t *testing.T) []Call {
 	t.Helper()
