@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/dwatts1772/work-agent-daemon/internal/logging"
@@ -114,7 +115,7 @@ func (r *Runner) Run(ctx context.Context, bin string, args []string, env ...stri
 	}
 
 	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = childEnv(bin, env)
+	cmd.Env = childEnv(bin, r.binaryDirs(), env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -150,19 +151,56 @@ func checkGHToken(bin string, args, env []string) error {
 // tokenVars are stripped from the inherited environment.
 var tokenVars = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 
-func childEnv(bin string, extra []string) []string {
+// binaryDirs are the directories of the resolved binaries, in Binaries
+// order.
+func (r *Runner) binaryDirs() []string {
+	var dirs []string
+	for _, name := range Binaries {
+		if path, ok := r.binaries[name]; ok {
+			dirs = append(dirs, filepath.Dir(path))
+		}
+	}
+	return dirs
+}
+
+// childEnv is the daemon's environment minus GitHub tokens, with PATH
+// extended by binaryDirs: a login item gets a minimal PATH, and a child
+// that looks something up there (an npm shim's `env node`, gh running git)
+// must still find the other binaries.
+func childEnv(bin string, binaryDirs, extra []string) []string {
 	var env []string
+	pathKey, path := "PATH", ""
 	for _, kv := range os.Environ() {
-		key, _, _ := strings.Cut(kv, "=")
+		key, value, _ := strings.Cut(kv, "=")
 		if isTokenVar(key) || (bin == "git" && strings.EqualFold(key, "GIT_TERMINAL_PROMPT")) {
+			continue
+		}
+		// Environment variable names are case-insensitive on Windows, where
+		// it is usually spelled Path.
+		if strings.EqualFold(key, "PATH") && (runtime.GOOS == "windows" || key == "PATH") {
+			pathKey, path = key, value
 			continue
 		}
 		env = append(env, kv)
 	}
+	dirs := filepath.SplitList(path)
+	for _, dir := range binaryDirs {
+		if !slices.ContainsFunc(dirs, func(d string) bool { return samePath(d, dir) }) {
+			dirs = append(dirs, dir)
+		}
+	}
+	env = append(env, pathKey+"="+strings.Join(dirs, string(filepath.ListSeparator)))
 	if bin == "git" {
 		env = append(env, "GIT_TERMINAL_PROMPT=0")
 	}
 	return append(env, extra...)
+}
+
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func isTokenVar(key string) bool {

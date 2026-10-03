@@ -44,16 +44,16 @@ func configWith(t *testing.T, fx testharness.Fixture) (string, *testharness.Stub
 
 func TestASecondInstanceRefusesToStart(t *testing.T) {
 	path := configFor(t)
-	first, err := prepare(context.Background(), path)
+	first, err := prepare(context.Background(), path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prepare(context.Background(), path); !errors.Is(err, state.ErrAlreadyRunning) {
+	if _, err := prepare(context.Background(), path, nil); !errors.Is(err, state.ErrAlreadyRunning) {
 		t.Fatalf("second instance: err = %v, want ErrAlreadyRunning", err)
 	}
 	first.close()
 
-	again, err := prepare(context.Background(), path)
+	again, err := prepare(context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("start after the first instance quit: %v", err)
 	}

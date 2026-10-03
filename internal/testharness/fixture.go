@@ -147,4 +147,4 @@ type Call struct {
 }
 
 // RecordedEnv lists the environment variables a Call captures.
-var RecordedEnv = []string{"GH_TOKEN", "GITHUB_TOKEN", "GIT_TERMINAL_PROMPT"}
+var RecordedEnv = []string{"GH_TOKEN", "GITHUB_TOKEN", "GIT_TERMINAL_PROMPT", "PATH"}

@@ -43,7 +43,7 @@ type windowed struct {
 func openWindow(t *testing.T, fx testharness.Fixture) *windowed {
 	t.Helper()
 	path, stubs := configWith(t, fx)
-	tr, err := prepare(context.Background(), path)
+	tr, err := prepare(context.Background(), path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestTheWindowListsEveryWorkItemWithItsHeldWakeAfterEachTick(t *testing.T) {
 
 func TestTheWindowListsNothingBeforeTheFirstTick(t *testing.T) {
 	path, _ := configWith(t, eligibleWorld(false))
-	tr, err := prepare(context.Background(), path)
+	tr, err := prepare(context.Background(), path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
