@@ -57,7 +57,7 @@ These rules hold under every Routing layer and every routed skill.
 
 **Owned Issue** — push only the Workspace's own branch, as a plain fast-forward: `git push -u origin HEAD`. Open pull requests with `gh pr create --draft`. Marking a PR ready for review is the Operator's call: when the work is done, tell the Operator the draft is ready for them.
 
-**Review Request** — a Review Workspace never pushes; its branch has no upstream (ADR-0003), and the review lives in findings, not commits.
+**Review Request** — a Review Workspace never pushes, not even with an explicit refspec such as `git push origin HEAD:<branch>`: its branch has no upstream (ADR-0003), but git would still accept an explicit one, so this rule is what keeps the PR author's branch untouched. The review lives in findings, not commits.
 
 **Held for Operator approval** — review findings, and replies to review threads (PRD §12 Operator gate), are held for Operator approval. Write them to `$(git rev-parse --git-dir)/work-item/review.md` with the head SHA they were written against, present them to the Operator, and wait for an explicit approval in this conversation. Then submit exactly what the Operator approved, with the verdict the Operator chose.
 
