@@ -13,10 +13,11 @@ import (
 const module = "github.com/dwatts1772/work-agent-daemon"
 
 // Check only holds if every child process goes through Runner.Run: no other
-// file built into the daemon's binaries may import os/exec. Test files and
-// the test harness are not built into them.
+// file of the packages built into the daemon's binaries, for any OS or build
+// tag, may import os/exec. Test files and the test harness are not built into
+// them.
 func TestRunnerIsTheOnlyDaemonFileThatImportsOsExec(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}|{{.Dir}}|{{join .GoFiles \",\"}}", module+"/cmd/...").CombinedOutput()
+	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}|{{.Dir}}|{{join .GoFiles \",\"}},{{join .CgoFiles \",\"}},{{join .IgnoredGoFiles \",\"}}", module+"/cmd/...").CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list: %v\n%s", err, out)
 	}

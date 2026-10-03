@@ -30,8 +30,9 @@ func Check(bin string, args []string) error {
 }
 
 // orcaAllowed lists the permitted orca commands as "command" or "command
-// subcommand". None removes a worktree or repo; terminal create's --command
-// is guarded by Wake, which refuses prompts a shell could interpret.
+// subcommand". None removes a Workspace or repo; what terminal create and
+// terminal send type into a terminal is guarded by Wake, which refuses
+// prompts a shell could interpret.
 var orcaAllowed = map[string]bool{
 	"status":          true,
 	"repo list":       true,
