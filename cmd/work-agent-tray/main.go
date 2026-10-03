@@ -1,5 +1,6 @@
 // Command work-agent-tray is the Wails v3 system-tray app (ADR-0004): it runs
-// the Tick loop in the background and shows the overall status in the tray.
+// the Tick loop in the background, shows the overall status in the tray and
+// delivers desktop notifications unless notify.desktop is false.
 // It embeds the same core as the headless CLI.
 //
 // Build it as a GUI-subsystem binary on Windows:
@@ -112,10 +113,17 @@ func (t *tray) close() {
 // serve shows the tray icon and runs the Tick loop until the Operator quits.
 // Quitting cancels the loop and waits for any in-flight Tick to end.
 func (t *tray) serve(ctx context.Context) error {
+	var services []application.Service
+	notifier := newDesktop(t.cfg, t.log)
+	if notifier != nil {
+		services = append(services, application.NewService(notifier))
+		t.daemon.AddNotifier(notifier)
+	}
 	app := application.New(application.Options{
 		Name:        "Work Agent",
 		Description: "Watches GitHub for the Operator and Wakes Claude Code in Orca Workspaces",
 		Assets:      application.AlphaAssets,
+		Services:    services,
 		Mac: application.MacOptions{
 			// A tray-only app: no Dock icon.
 			ActivationPolicy: application.ActivationPolicyAccessory,
@@ -159,6 +167,9 @@ func (t *tray) serve(ctx context.Context) error {
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		if started.Swap(true) {
 			return
+		}
+		if notifier != nil {
+			go notifier.authorize()
 		}
 		go func() {
 			defer close(loopDone)
