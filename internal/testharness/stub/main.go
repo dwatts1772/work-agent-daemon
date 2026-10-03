@@ -25,7 +25,8 @@ func main() {
 	record(dir, bin, args)
 
 	data, err := os.ReadFile(filepath.Join(dir, testharness.FixtureFile))
-	if bin != "gh" && (bin != "orca" || os.IsNotExist(err)) {
+	isRevParse := bin == "git" && slices.Contains(args, "rev-parse")
+	if bin != "gh" && !isRevParse && (bin != "orca" || os.IsNotExist(err)) {
 		fmt.Printf("stub %s\n", bin)
 		return
 	}
@@ -38,6 +39,10 @@ func main() {
 	}
 	if bin == "orca" {
 		orca(dir, fx.Orca, args)
+		return
+	}
+	if isRevParse {
+		revParse(fx, args)
 		return
 	}
 	gh(fx, args)
@@ -209,6 +214,7 @@ func prList(fx testharness.Fixture, args []string) {
 	repo := fs.String("repo", "", "")
 	author := fs.String("author", "", "")
 	state := fs.String("state", "open", "")
+	search := fs.String("search", "", "")
 	fs.String("json", "", "")
 	limit := fs.Int("limit", 30, "")
 	if err := fs.Parse(args); err != nil {
@@ -217,8 +223,14 @@ func prList(fx testharness.Fixture, args []string) {
 	if *repo == "" {
 		fail(2, "stub gh: --repo is required")
 	}
-	if *author == "@me" {
+	if *author == "@me" || strings.Contains(*search, "@me") {
 		fail(2, "stub gh: @me resolves via the active account and is forbidden")
+	}
+	// The only search the daemon makes: PRs requesting a user's review
+	// directly, not through a team.
+	requested, hasSearch := strings.CutPrefix(*search, "user-review-requested:")
+	if *search != "" && !hasSearch {
+		fail(2, "stub gh: unsupported --search %q", *search)
 	}
 	type ref struct {
 		Number     int `json:"number"`
@@ -233,12 +245,16 @@ func prList(fx testharness.Fixture, args []string) {
 		Number      int    `json:"number"`
 		URL         string `json:"url"`
 		State       string `json:"state"`
+		Title       string `json:"title"`
 		HeadRefName string `json:"headRefName"`
+		HeadRefOid  string `json:"headRefOid"`
 		Body        string `json:"body"`
 		Author      struct {
 			Login string `json:"login"`
 		} `json:"author"`
-		ClosingIssuesReferences []ref `json:"closingIssuesReferences"`
+		ClosingIssuesReferences []ref            `json:"closingIssuesReferences"`
+		ReviewRequests          []map[string]any `json:"reviewRequests"`
+		StatusCheckRollup       []map[string]any `json:"statusCheckRollup"`
 	}
 	out := []pr{}
 	prs := fx.PullRequests[*repo]
@@ -250,7 +266,18 @@ func prList(fx testharness.Fixture, args []string) {
 		if *state != "all" && !strings.EqualFold(*state, p.State) {
 			continue
 		}
-		o := pr{Number: p.Number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", *repo, p.Number), State: p.State, HeadRefName: p.HeadRefName, Body: p.Body, ClosingIssuesReferences: []ref{}}
+		if hasSearch && !slices.Contains(p.ReviewRequests, requested) {
+			continue
+		}
+		o := pr{Number: p.Number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", *repo, p.Number), State: p.State, Title: p.Title, HeadRefName: p.HeadRefName, HeadRefOid: p.HeadSHA, Body: p.Body,
+			ClosingIssuesReferences: []ref{}, ReviewRequests: []map[string]any{}, StatusCheckRollup: rollup(p.Checks)}
+		for _, r := range p.ReviewRequests {
+			if org, team, ok := strings.Cut(r, "/"); ok {
+				o.ReviewRequests = append(o.ReviewRequests, map[string]any{"__typename": "Team", "name": team, "slug": org + "/" + team})
+			} else {
+				o.ReviewRequests = append(o.ReviewRequests, map[string]any{"__typename": "User", "login": r})
+			}
+		}
 		o.Author.Login = p.Author
 		for _, c := range p.ClosingIssues {
 			var r ref
@@ -279,10 +306,6 @@ func prView(fx testharness.Fixture, number string, args []string) {
 		if fmt.Sprint(p.Number) != number {
 			continue
 		}
-		rollup := []map[string]any{}
-		for _, c := range p.Checks {
-			rollup = append(rollup, map[string]any{"__typename": "CheckRun", "name": c.Name, "status": c.Status, "conclusion": c.Conclusion})
-		}
 		reviews := []map[string]any{}
 		for _, r := range p.Reviews {
 			reviews = append(reviews, map[string]any{"id": r.ID, "author": map[string]any{"login": r.Author}, "authorAssociation": r.AuthorAssociation, "body": r.Body, "state": r.State, "submittedAt": r.SubmittedAt})
@@ -291,11 +314,43 @@ func prView(fx testharness.Fixture, number string, args []string) {
 		for _, c := range p.Comments {
 			comments = append(comments, map[string]any{"id": c.ID, "author": map[string]any{"login": c.Author}, "authorAssociation": c.AuthorAssociation, "body": c.Body, "createdAt": c.CreatedAt})
 		}
-		out, _ := json.Marshal(map[string]any{"headRefOid": p.HeadSHA, "statusCheckRollup": rollup, "reviews": reviews, "comments": comments})
+		out, _ := json.Marshal(map[string]any{"headRefOid": p.HeadSHA, "statusCheckRollup": rollup(p.Checks), "reviews": reviews, "comments": comments})
 		fmt.Println(string(out))
 		return
 	}
 	fail(1, "GraphQL: Could not resolve to a PullRequest with the number of %s.", number)
+}
+
+// revParse resolves the refs/remotes/origin/pr/<n> a fetch of the pull ref
+// made in an Orca clone (`git -C <clones/<repo id>> rev-parse <ref>`): the
+// fixture's PullRefs entry, else the PR's head.
+func revParse(fx testharness.Fixture, args []string) {
+	ref := args[len(args)-1]
+	n, isPullRef := strings.CutPrefix(ref, "refs/remotes/origin/pr/")
+	repo := ""
+	if fx.Orca != nil && len(args) > 1 && args[0] == "-C" {
+		repo = fx.Orca.Repos[filepath.Base(args[1])]
+	}
+	if sha, ok := fx.PullRefs[repo+"#"+n]; isPullRef && ok {
+		fmt.Println(sha)
+		return
+	}
+	for _, p := range fx.PullRequests[repo] {
+		if isPullRef && fmt.Sprint(p.Number) == n && p.HeadSHA != "" {
+			fmt.Println(p.HeadSHA)
+			return
+		}
+	}
+	fail(128, "fatal: ambiguous argument '%s': unknown revision or path not in the working tree.", ref)
+}
+
+// rollup is checks as statusCheckRollup reports them.
+func rollup(checks []testharness.Check) []map[string]any {
+	out := []map[string]any{}
+	for _, c := range checks {
+		out = append(out, map[string]any{"__typename": "CheckRun", "name": c.Name, "status": c.Status, "conclusion": c.Conclusion})
+	}
+	return out
 }
 
 func fail(code int, format string, a ...any) {

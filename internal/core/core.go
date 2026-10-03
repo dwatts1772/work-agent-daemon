@@ -148,6 +148,13 @@ func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflo
 	next, statusActions := workflow.Reconcile(next, d.observePRStatus(ctx, next, now))
 	actions = append(actions, statusActions...)
 
+	reviews, err := d.observeReviewRequests(ctx, now)
+	if err != nil {
+		return workflow.State{}, 0, nil, err
+	}
+	next, reviewActions := workflow.Reconcile(next, reviews)
+	actions = append(actions, reviewActions...)
+
 	// An issue that cannot be read, such as a deleted one, is treated as no
 	// longer Eligible: it is Paused, never lost, and never fails the Tick.
 	missing := workflow.Ineligible(next, assigned, now)
@@ -218,6 +225,26 @@ func (d *Daemon) observePRStatus(ctx context.Context, st workflow.State, now tim
 		})
 	}
 	return events
+}
+
+// observeReviewRequests turns the open PRs across the allowlisted repos that
+// explicitly request the Operator's review into events, with the CI state of
+// each head; the reducer tracks only those whose CI is Settled.
+func (d *Daemon) observeReviewRequests(ctx context.Context, now time.Time) ([]workflow.Event, error) {
+	var events []workflow.Event
+	for _, repo := range d.cfg.GitHub.Repos {
+		requests, err := d.github.ReviewRequests(ctx, repo)
+		if err != nil {
+			return nil, fmt.Errorf("list review requests in %s: %w", repo, err)
+		}
+		for _, r := range requests {
+			events = append(events, workflow.Event{
+				Type: workflow.ReviewRequested, Repo: r.Repo, Title: r.Title, PR: r.Number, PRURL: r.URL,
+				HeadSHA: r.CI.HeadSHA, Settled: r.CI.Settled, Failed: r.CI.Failed, Reviewer: d.cfg.GitHub.Account, ObservedAt: now,
+			})
+		}
+	}
+	return events, nil
 }
 
 // prEvent decides what w's PRs, newest first, say about it: the linked PR
@@ -300,7 +327,7 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 			if item.State != workflow.PendingWorkspace || item.Workspace != nil {
 				continue
 			}
-			ws, err := d.workspaces.CreateForIssue(ctx, workspace.CreateInput{Repo: item.Repo, Issue: item.Issue})
+			ws, err := d.createWorkspace(ctx, item)
 			if err != nil {
 				next = d.failed(st, item.ID, "create Workspace", err)
 				break
@@ -321,6 +348,15 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 		}
 	}
 	return false, nil
+}
+
+// createWorkspace creates item's Workspace: a Review Workspace for a
+// Review Request, otherwise the Owned Issue's Workspace.
+func (d *Daemon) createWorkspace(ctx context.Context, item workflow.WorkItem) (workspace.Workspace, error) {
+	if item.Kind == workflow.KindReviewRequest {
+		return d.workspaces.CreateForReview(ctx, workspace.ReviewInput{Repo: item.Repo, PR: item.PR, HeadSHA: item.HeadSHA})
+	}
+	return d.workspaces.CreateForIssue(ctx, workspace.CreateInput{Repo: item.Repo, Issue: item.Issue})
 }
 
 // wake Wakes Claude in item's Workspace and returns the recorded outcome. A

@@ -22,6 +22,14 @@ type CreateInput struct {
 	Issue int
 }
 
+// ReviewInput describes the Review Request a Review Workspace is created
+// for: PR in Repo, whose head commit HeadSHA has Settled CI.
+type ReviewInput struct {
+	Repo    string
+	PR      int
+	HeadSHA string
+}
+
 // AgentState is the live state of a Workspace's agent, read as a signal each
 // Tick and never stored (ADR-0001).
 type AgentState string
@@ -37,6 +45,7 @@ const (
 type Backend interface {
 	Available(ctx context.Context) (bool, error)
 	CreateForIssue(ctx context.Context, in CreateInput) (Workspace, error)
+	CreateForReview(ctx context.Context, in ReviewInput) (Workspace, error)
 	AgentState(ctx context.Context, ws Workspace) (AgentState, error)
 	Wake(ctx context.Context, ws Workspace, prompt string) error
 	Exists(ctx context.Context, ws Workspace) (bool, error)

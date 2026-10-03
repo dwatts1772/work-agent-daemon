@@ -30,6 +30,9 @@ type Fixture struct {
 	// EchoTokenOnError makes failing gh calls print GH_TOKEN to stderr, as
 	// a hostile stand-in for any tool that leaks its credentials in errors.
 	EchoTokenOnError bool `json:"echoTokenOnError"`
+	// PullRefs maps "owner/name#n" to the commit refs/pull/<n>/head is at
+	// when the stub git fetches it; by default the PR's HeadSHA.
+	PullRefs map[string]string `json:"pullRefs,omitempty"`
 	// Orca is the Orca runtime the stub orca simulates; nil means Orca is
 	// not running.
 	Orca *Orca `json:"orca,omitempty"`
@@ -66,6 +69,8 @@ type OrcaWorktree struct {
 	Path        string `json:"path"`
 	Branch      string `json:"branch"`
 	Issue       int    `json:"issue"`
+	// BaseBranch is the --base-branch it was created from, if any.
+	BaseBranch string `json:"baseBranch,omitempty"`
 }
 
 type Issue struct {
@@ -83,12 +88,16 @@ type PullRequest struct {
 	Number int `json:"number"`
 	// State is "OPEN", "MERGED" or "CLOSED".
 	State       string `json:"state"`
+	Title       string `json:"title,omitempty"`
 	HeadRefName string `json:"headRefName"`
 	Body        string `json:"body"`
 	Author      string `json:"author"`
 	// ClosingIssues are the "owner/name#number" issues GitHub links to the
 	// PR as ones it closes.
 	ClosingIssues []string `json:"closingIssues,omitempty"`
+	// ReviewRequests are the PR's requested reviewers: user logins, or
+	// "org/team" for a team.
+	ReviewRequests []string `json:"reviewRequests,omitempty"`
 	// HeadSHA is the PR's head commit and Checks the checks on it.
 	HeadSHA string  `json:"headSha,omitempty"`
 	Checks  []Check `json:"checks,omitempty"`
