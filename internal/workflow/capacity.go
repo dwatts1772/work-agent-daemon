@@ -48,27 +48,27 @@ func (p FixedSlots) FreeSlots(kind Kind, agents []AgentSnapshot) int {
 // FIFO, Review Requests first: a Held Wake in order of when it was first
 // Held, ahead of Wakes not yet Held. Each Wake let through occupies a slot
 // from then on; a Workspace is created only for a Wake that proceeds. A Wake
-// whose own agent is working or waiting on the Operator proceeds without a
-// slot, to be Held because that agent cannot take it.
+// whose own agent is working proceeds without a slot, to be Held because
+// that agent cannot take it.
 func Admit(pending []Action, agents []AgentSnapshot, policy CapacityPolicy) (proceed, held []Action) {
 	agents = slices.Clone(agents)
-	creates := map[string]Action{}
+	createByItem := map[string]Action{}
 	var wakes []Action
 	for _, a := range pending {
 		switch a.Type {
 		case CreateWorkspace:
-			creates[a.Item.ID] = a
+			createByItem[a.Item.ID] = a
 		case Wake:
 			wakes = append(wakes, a)
 		}
 	}
-	busy := map[string]bool{}
+	ownAgentWorking := map[string]bool{}
 	for _, s := range agents {
-		busy[s.Item] = s.State == workspace.AgentWorking || s.State == workspace.AgentWaiting
+		ownAgentWorking[s.Item] = s.State == workspace.AgentWorking
 	}
 	slices.SortStableFunc(wakes, releaseOrder)
 	for _, a := range wakes {
-		if busy[a.Item.ID] {
+		if ownAgentWorking[a.Item.ID] {
 			// Its own agent cannot take the Wake, which is Held for that.
 			proceed = append(proceed, a)
 			continue
@@ -77,7 +77,7 @@ func Admit(pending []Action, agents []AgentSnapshot, policy CapacityPolicy) (pro
 			held = append(held, a)
 			continue
 		}
-		if c, ok := creates[a.Item.ID]; ok {
+		if c, ok := createByItem[a.Item.ID]; ok {
 			proceed = append(proceed, c)
 		}
 		proceed = append(proceed, a)

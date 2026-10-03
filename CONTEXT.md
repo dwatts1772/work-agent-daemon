@@ -56,7 +56,7 @@ A Work Item the daemon will not Wake — set by the Operator, or automatically w
 _Avoid_: blocked, suspended
 
 **Held Wake**:
-A Wake the daemon has decided on but deferred — because the agent is working, the Workspace's backend is unavailable, or a Quiet Period has not elapsed. It is retried on a later Tick, never dropped.
+A Wake the daemon has decided on but deferred — because the agent is working, the Workspace's backend is unavailable, no capacity slot is free, or a Quiet Period has not elapsed. It is retried on a later Tick, never dropped.
 _Avoid_: queued wake, pending wake
 
 **Settled**:

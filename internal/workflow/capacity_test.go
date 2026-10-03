@@ -126,22 +126,33 @@ func wokenIDs(actions []Action) []string {
 	return ids
 }
 
-func TestAWakeForABusyAgentIsLeftToBeHeldAsAgentWorking(t *testing.T) {
-	for _, state := range []workspace.AgentState{workspace.AgentWorking, workspace.AgentWaiting} {
-		own := withWorkspace(ownedIssue("org/a", 1))
-		own.State, own.PR, own.DueWake = WaitingForCI, 60, WakeCIFailure
-		other := withWorkspace(ownedIssue("org/a", 2))
-		pending := PendingActions(State{Items: []WorkItem{own}})
-		agents := []AgentSnapshot{
-			{Item: own.ID, Kind: KindOwnedIssue, State: state},
-			{Item: other.ID, Kind: KindOwnedIssue, State: workspace.AgentWorking},
-		}
+func TestAWakeForAWorkingAgentIsLeftToBeHeldAsAgentWorking(t *testing.T) {
+	own := withWorkspace(ownedIssue("org/a", 1))
+	own.State, own.PR, own.DueWake = WaitingForCI, 60, WakeCIFailure
+	pending := PendingActions(State{Items: []WorkItem{own}})
+	agents := []AgentSnapshot{{Item: own.ID, Kind: KindOwnedIssue, State: workspace.AgentWorking}}
 
-		proceed, held := Admit(pending, agents, mvp)
+	proceed, held := Admit(pending, agents, mvp)
 
-		if len(held) != 0 || !reflect.DeepEqual(wokenIDs(proceed), []string{own.ID}) {
-			t.Errorf("own agent %s: proceed = %q, held = %q; the Wake must reach the agent-working check", state, wokenIDs(proceed), wokenIDs(held))
-		}
+	if len(held) != 0 || !reflect.DeepEqual(wokenIDs(proceed), []string{own.ID}) {
+		t.Errorf("proceed = %q, held = %q; the Wake must reach the agent-working check", wokenIDs(proceed), wokenIDs(held))
+	}
+}
+
+func TestAWakeForAWaitingAgentStillNeedsAFreeSlot(t *testing.T) {
+	own := withWorkspace(ownedIssue("org/a", 1))
+	own.State, own.PR, own.DueWake = WaitingForCI, 60, WakeCIFailure
+	other := withWorkspace(ownedIssue("org/a", 2))
+	pending := PendingActions(State{Items: []WorkItem{own}})
+	agents := []AgentSnapshot{
+		{Item: own.ID, Kind: KindOwnedIssue, State: workspace.AgentWaiting},
+		{Item: other.ID, Kind: KindOwnedIssue, State: workspace.AgentWorking},
+	}
+
+	proceed, held := Admit(pending, agents, mvp)
+
+	if len(proceed) != 0 || !reflect.DeepEqual(wokenIDs(held), []string{own.ID}) {
+		t.Errorf("proceed = %q, held = %q; want the Wake Held for capacity", wokenIDs(proceed), wokenIDs(held))
 	}
 }
 

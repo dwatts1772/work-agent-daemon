@@ -21,7 +21,7 @@ func issueWakes(t *testing.T, c *cli) []string {
 	return got
 }
 
-// withAgents sets the states of the agents in the named worktrees.
+// withAgents sets the states of the agents in the Workspaces Orca names.
 func withAgents(fx testharness.Fixture, states map[string][]string) testharness.Fixture {
 	fx.Orca.AgentStates = states
 	return fx

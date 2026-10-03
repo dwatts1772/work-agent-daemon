@@ -366,7 +366,8 @@ func (d *Daemon) capacity() workflow.CapacityPolicy {
 
 // agents reads the state of the agent in every Workspace of a Work Item not
 // yet Done, as signals for the CapacityPolicy that are never stored
-// (ADR-0001). An agent whose state cannot be read is left out.
+// (ADR-0001). An agent whose state cannot be read is taken to be working, so
+// it keeps its slot rather than letting another Wake over capacity.
 func (d *Daemon) agents(ctx context.Context, st workflow.State) []workflow.AgentSnapshot {
 	var agents []workflow.AgentSnapshot
 	for _, w := range st.Items {
@@ -375,8 +376,8 @@ func (d *Daemon) agents(ctx context.Context, st workflow.State) []workflow.Agent
 		}
 		s, err := d.workspaces.AgentState(ctx, *w.Workspace)
 		if err != nil {
-			d.log.Warn("cannot read agent state; it occupies no capacity slot this Tick", "item", w.ID, "err", err)
-			continue
+			d.log.Warn("cannot read agent state; it keeps its capacity slot this Tick", "item", w.ID, "err", err)
+			s = workspace.AgentWorking
 		}
 		agents = append(agents, workflow.AgentSnapshot{Item: w.ID, Kind: w.Kind, State: s})
 	}
