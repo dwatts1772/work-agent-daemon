@@ -46,7 +46,7 @@ func TestAViewOffersOnlyTheCommandsThatApply(t *testing.T) {
 		{"paused by the Operator", workflow.WorkItem{State: workflow.Paused, Pause: &workflow.Pause{ByOperator: true}}, "paused by Operator", false, true, false},
 		{"not Eligible", workflow.WorkItem{State: workflow.Paused, Pause: &workflow.Pause{NotEligible: true}}, "not Eligible", true, false, false},
 		{"both", workflow.WorkItem{State: workflow.Paused, Pause: &workflow.Pause{ByOperator: true, NotEligible: true}}, "paused by Operator, not Eligible", false, true, false},
-		{"DONE", workflow.WorkItem{State: workflow.Done}, "", false, false, false},
+		{"DONE", workflow.WorkItem{State: workflow.Done}, "", true, false, false}, // `work-agent pause` accepts it too
 	} {
 		tc.w.Kind = workflow.KindOwnedIssue
 		v := View(tc.w)

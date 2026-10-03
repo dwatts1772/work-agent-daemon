@@ -27,7 +27,8 @@ type ItemView struct {
 	// SafeToCleanUp marks a DONE Review Workspace: the daemon will never
 	// use it again, and it is retained only until the Operator removes it.
 	SafeToCleanUp bool `json:"safeToCleanUp"`
-	// CanPause, CanResume and CanWake say which Operator commands apply.
+	// CanPause, CanResume and CanWake say which Operator commands would
+	// change the item, exactly as the CLI's pause, resume and wake decide.
 	CanPause  bool `json:"canPause"`
 	CanResume bool `json:"canResume"`
 	CanWake   bool `json:"canWake"`
@@ -50,7 +51,7 @@ func View(w workflow.WorkItem) ItemView {
 		PRURL:     w.PRURL,
 		Paused:    PausedBecause(w),
 		LastError: w.LastError,
-		CanPause:  w.State != workflow.Done && (w.Pause == nil || !w.Pause.ByOperator),
+		CanPause:  w.Pause == nil || !w.Pause.ByOperator,
 		CanResume: w.Pause != nil && w.Pause.ByOperator,
 		CanWake:   len(workflow.PendingActions(workflow.State{Items: []workflow.WorkItem{w}})) > 0,
 	}
