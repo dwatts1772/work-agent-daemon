@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"github.com/dwatts1772/work-agent-daemon/internal/logging"
 	"github.com/dwatts1772/work-agent-daemon/internal/process"
 	"github.com/dwatts1772/work-agent-daemon/internal/state"
-	"github.com/dwatts1772/work-agent-daemon/internal/workflow"
 )
 
 const usage = `usage: work-agent tick [--dry-run] [--config path]`
@@ -63,10 +61,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// Take the lock before anything else, so a second Tick fails fast.
 	store, err := state.Open(stateDir)
-	if errors.Is(err, state.ErrLocked) {
-		fmt.Fprintln(stderr, "work-agent: another Tick is running:", err)
-		return 1
-	}
 	if err != nil {
 		fmt.Fprintln(stderr, "work-agent:", err)
 		return 1
@@ -83,14 +77,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	})
 }
 
-func tick(stdout, stderr io.Writer, log *logging.Logger, cfg config.Config, do func(context.Context, *core.Daemon) (core.Result, error)) int {
+func tick(stdout, stderr io.Writer, log *logging.Logger, cfg config.Config, act func(context.Context, *core.Daemon) (core.Result, error)) int {
 	ctx := context.Background()
 	daemon, err := core.Start(ctx, cfg, log, process.DefaultSearchDirs())
 	if err != nil {
 		fmt.Fprintln(stderr, "work-agent: refusing to run:", log.Redact(err.Error()))
 		return 1
 	}
-	res, err := do(ctx, daemon)
+	res, err := act(ctx, daemon)
 	if err != nil {
 		fmt.Fprintln(stderr, "work-agent:", log.Redact(err.Error()))
 		return 1
@@ -109,12 +103,7 @@ func printResult(w io.Writer, res core.Result) {
 		return
 	}
 	for _, a := range res.Actions {
-		switch a.Type {
-		case workflow.CreateOwnedIssue:
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", a.Type, a.Item.ID, a.Item.State, a.Item.Title, a.Item.IssueURL)
-		default:
-			fmt.Fprintf(w, "%s\t%s\t%s\n", a.Type, a.ItemID, a.Marker)
-		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", a.Type, a.Item.ID, a.Item.State, a.Item.Title, a.Item.IssueURL)
 	}
 }
 

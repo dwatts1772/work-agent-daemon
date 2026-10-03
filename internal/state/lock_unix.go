@@ -8,8 +8,8 @@ import (
 	"syscall"
 )
 
-// lockDir takes a non-blocking exclusive flock on path.
-func lockDir(path string) (*os.File, error) {
+// acquireLock takes a non-blocking exclusive flock on path.
+func acquireLock(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err

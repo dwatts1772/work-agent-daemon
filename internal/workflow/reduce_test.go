@@ -58,7 +58,7 @@ func TestReduce(t *testing.T) {
 			name:  "existing Owned Issue without the marker is not duplicated",
 			state: State{Items: []WorkItem{ownedIssue("org/a", 1)}},
 			event: assigned("org/a", 1),
-			want:  []Action{{Type: RecordMarker, ItemID: "org/a#1", Marker: "org/a#1:assigned"}},
+			want:  nil,
 		},
 		{
 			name:  "same number in another repo is a different Owned Issue",
@@ -130,18 +130,5 @@ func TestReconcileAppliesEachEventOnce(t *testing.T) {
 	}
 	if !reflect.DeepEqual(again, next) {
 		t.Errorf("re-running changed state")
-	}
-}
-
-func TestReconcileRecordsMarkerOnExistingItem(t *testing.T) {
-	start := State{Items: []WorkItem{ownedIssue("org/a", 1)}}
-
-	next, _ := Reconcile(start, []Event{assigned("org/a", 1)})
-
-	if got := next.Items[0].ProcessedEventIDs; !reflect.DeepEqual(got, []string{"org/a#1:assigned"}) {
-		t.Errorf("markers = %v", got)
-	}
-	if len(start.Items[0].ProcessedEventIDs) != 0 {
-		t.Errorf("Reconcile mutated its input state")
 	}
 }

@@ -24,8 +24,14 @@ type FakeWake struct {
 
 var _ Backend = (*Fake)(nil)
 
-func (f *Fake) Available(context.Context) (bool, error) { return !f.Unavailable, nil }
+// Available reports whether the fake is reachable.
+func (f *Fake) Available(context.Context) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.Unavailable, nil
+}
 
+// CreateForIssue records and returns a made-up Workspace.
 func (f *Fake) CreateForIssue(_ context.Context, in CreateInput) (Workspace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -43,6 +49,7 @@ func (f *Fake) CreateForIssue(_ context.Context, in CreateInput) (Workspace, err
 	return ws, nil
 }
 
+// AgentState returns States[ws.OrcaIdentityKey], or AgentNone.
 func (f *Fake) AgentState(_ context.Context, ws Workspace) (AgentState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -52,6 +59,7 @@ func (f *Fake) AgentState(_ context.Context, ws Workspace) (AgentState, error) {
 	return AgentNone, nil
 }
 
+// Wake records the Wake.
 func (f *Fake) Wake(_ context.Context, ws Workspace, prompt string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -62,6 +70,7 @@ func (f *Fake) Wake(_ context.Context, ws Workspace, prompt string) error {
 	return nil
 }
 
+// Exists reports whether the fake created ws.
 func (f *Fake) Exists(_ context.Context, ws Workspace) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

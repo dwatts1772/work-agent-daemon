@@ -15,12 +15,17 @@ import (
 	"github.com/dwatts1772/work-agent-daemon/internal/workspace"
 )
 
+// Kind distinguishes Owned Issues from Review Requests.
 type Kind string
 
 const KindOwnedIssue Kind = "OWNED_ISSUE"
 
+// ItemState is a Work Item's state. It is derived only from GitHub
+// observations plus the daemon's own records, such as whether a Workspace
+// exists (ADR-0001); it never records what phase Claude is in.
 type ItemState string
 
+// PendingWorkspace is an Owned Issue whose Workspace does not exist yet.
 const PendingWorkspace ItemState = "PENDING_WORKSPACE"
 
 // WorkItem is one tracked unit of work. Only Owned Issues exist so far.
@@ -40,10 +45,6 @@ type WorkItem struct {
 	ProcessedEventIDs []string  `json:"processedEventIds"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
-}
-
-func (w WorkItem) processed(marker string) bool {
-	return slices.Contains(w.ProcessedEventIDs, marker)
 }
 
 // State is every Work Item the daemon tracks; it is what state.json holds.
@@ -72,6 +73,7 @@ func (s State) clone() State {
 	return State{Items: items}
 }
 
+// EventType names what a Tick observed.
 type EventType string
 
 // IssueAssigned is the observation that an Eligible issue is assigned to the
@@ -101,21 +103,16 @@ func (e Event) Marker() string {
 	return e.Ref() + ":" + string(e.Type)
 }
 
+// ActionType names what the reducer decided should happen.
 type ActionType string
 
-const (
-	// CreateOwnedIssue starts tracking Item.
-	CreateOwnedIssue ActionType = "CREATE_OWNED_ISSUE"
-	// RecordMarker marks Marker as processed on the Work Item ItemID.
-	RecordMarker ActionType = "RECORD_MARKER"
-)
+// CreateOwnedIssue starts tracking Item.
+const CreateOwnedIssue ActionType = "CREATE_OWNED_ISSUE"
 
-// Action is something the reducer decided should happen.
+// Action is something the reducer decided should happen to Item.
 type Action struct {
-	Type   ActionType
-	Item   WorkItem `json:",omitzero"`
-	ItemID string   `json:",omitempty"`
-	Marker string   `json:",omitempty"`
+	Type ActionType
+	Item WorkItem
 }
 
 // Reduce decides the actions for one event. It never modifies state.
@@ -124,12 +121,10 @@ func Reduce(state State, event Event) []Action {
 		return nil
 	}
 	marker := event.Marker()
-	existing, i := state.find(event.Ref())
-	switch {
-	case i >= 0 && existing.processed(marker):
+	// The Work Item is keyed by the issue, so an issue already tracked is
+	// never recorded twice, whatever markers it carries.
+	if _, i := state.find(event.Ref()); i >= 0 {
 		return nil
-	case i >= 0:
-		return []Action{{Type: RecordMarker, ItemID: existing.ID, Marker: marker}}
 	}
 	return []Action{{Type: CreateOwnedIssue, Item: WorkItem{
 		ID:                event.Ref(),
@@ -150,13 +145,8 @@ func Reduce(state State, event Event) []Action {
 func Apply(state State, actions []Action) State {
 	next := state.clone()
 	for _, a := range actions {
-		switch a.Type {
-		case CreateOwnedIssue:
+		if a.Type == CreateOwnedIssue {
 			next.Items = append(next.Items, a.Item)
-		case RecordMarker:
-			if _, i := next.find(a.ItemID); i >= 0 {
-				next.Items[i].ProcessedEventIDs = append(next.Items[i].ProcessedEventIDs, a.Marker)
-			}
 		}
 	}
 	return next

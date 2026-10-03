@@ -63,7 +63,7 @@ func (d *Daemon) Tick(ctx context.Context, store *state.Store) (Result, error) {
 		}
 	}
 	for _, a := range res.Actions {
-		d.log.Info("action", "action", a.Type, "item", actionItem(a))
+		d.log.Info("action", "action", a.Type, "item", a.Item.ID)
 	}
 	return res, nil
 }
@@ -106,11 +106,4 @@ func (d *Daemon) observe(ctx context.Context) ([]workflow.Event, error) {
 		}
 	}
 	return events, nil
-}
-
-func actionItem(a workflow.Action) string {
-	if a.Type == workflow.CreateOwnedIssue {
-		return a.Item.ID
-	}
-	return a.ItemID
 }

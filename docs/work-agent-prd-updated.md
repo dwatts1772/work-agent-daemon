@@ -246,7 +246,7 @@ type WorkflowEvent =
 
 Every event has a stable dedupe marker:
 
-- issue assignment: `repo#issue:assigned:<updatedAt>`
+- issue assignment: `repo#issue:assigned` (not keyed by `updatedAt`, which changes on every edit to the issue; pausing/resuming on Eligibility changes will need its own marker)
 - review request: `repo#pr:review-request:<reviewer>:<headSha>`
 - review head change: `repo#pr:review-head:<headSha>`
 - submitted review: review ID

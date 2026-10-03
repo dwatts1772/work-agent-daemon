@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/dwatts1772/work-agent-daemon/internal/workflow"
 )
@@ -42,7 +43,7 @@ func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	lock, err := lockDir(filepath.Join(dir, lockFile))
+	lock, err := acquireLock(filepath.Join(dir, lockFile))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", dir, err)
 	}
@@ -79,12 +80,26 @@ func (s *Store) Save(st workflow.State) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(s.dir, stateFile))
+	return renameRetrying(tmp, filepath.Join(s.dir, stateFile))
+}
+
+// renameRetrying renames from over to. On Windows the rename fails while a
+// reader (such as a dry run's Read) has the target open, so it retries
+// briefly.
+func renameRetrying(from, to string) error {
+	var err error
+	for range 20 {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return err
 }
 
 // Read loads state.json from dir without locking or writing anything; a
 // missing file is an empty state. It is safe beside a running Tick because
-// Save replaces the file atomically.
+// Save replaces the file atomically (retrying if this read holds it open).
 func Read(dir string) (workflow.State, error) {
 	path := filepath.Join(dir, stateFile)
 	data, err := os.ReadFile(path)
