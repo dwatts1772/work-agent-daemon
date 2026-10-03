@@ -120,35 +120,53 @@ func (o *Orca) CreateForIssue(ctx context.Context, in CreateInput) (Workspace, e
 }
 
 // CreateForReview creates the Review Request's Review Workspace (ADR-0003):
-// it fetches the PR's head from GitHub's pull ref, which works for forks
-// too, into <remote>/pr/<n> in the repo's Orca clone, then creates a new
-// Orca worktree on a new local branch review-pr-<n> starting there. Orca
-// creates that branch without tracking anything, so it has no path to push
-// to the PR author's branch. Like CreateForIssue it starts no agent.
-//
-// It refuses when the fetched head is not in.HeadSHA, the head whose CI
-// Settled: the author pushed since, and the new head is not yet Settled.
+// it fetches the PR's head from GitHub's pull ref (see FetchReviewHead),
+// then creates a new Orca worktree on a new local branch review-pr-<n>
+// starting at <remote>/pr/<n>. Orca creates that branch without tracking
+// anything, so it has no path to push to the PR author's branch. Like
+// CreateForIssue it starts no agent.
 func (o *Orca) CreateForReview(ctx context.Context, in ReviewInput) (Workspace, error) {
-	repo, err := o.repo(ctx, in.Repo)
+	repo, base, err := o.fetchReviewHead(ctx, in)
 	if err != nil {
 		return Workspace{}, err
 	}
+	return o.create(ctx, repo, "review-pr-"+strconv.Itoa(in.PR), "--base-branch", base)
+}
+
+// FetchReviewHead fetches the PR's head from GitHub's pull ref, which works
+// for forks too, into <remote>/pr/<n> in the repo's Orca clone, where a
+// re-review in the existing Review Workspace finds it.
+//
+// It refuses when the fetched head is not in.HeadSHA, the head whose CI
+// Settled: the author pushed since, and the new head is not yet Settled.
+func (o *Orca) FetchReviewHead(ctx context.Context, in ReviewInput) error {
+	_, _, err := o.fetchReviewHead(ctx, in)
+	return err
+}
+
+// fetchReviewHead fetches the PR's head as FetchReviewHead does, returning
+// the Orca repo and the ref it fetched into.
+func (o *Orca) fetchReviewHead(ctx context.Context, in ReviewInput) (orcaRepo, string, error) {
+	repo, err := o.repo(ctx, in.Repo)
+	if err != nil {
+		return orcaRepo{}, "", err
+	}
 	if repo.Path == "" || repo.Remote == "" {
-		return Workspace{}, fmt.Errorf("orca repo list: %s has no local path or remote", in.Repo)
+		return orcaRepo{}, "", fmt.Errorf("orca repo list: %s has no local path or remote", in.Repo)
 	}
 	n := strconv.Itoa(in.PR)
 	base := repo.Remote + "/pr/" + n
 	if _, err := o.runner.Run(ctx, "git", []string{"-C", repo.Path, "fetch", repo.Remote, "+refs/pull/" + n + "/head:refs/remotes/" + base}); err != nil {
-		return Workspace{}, fmt.Errorf("fetch the head of %s#%d: %w", in.Repo, in.PR, err)
+		return orcaRepo{}, "", fmt.Errorf("fetch the head of %s#%d: %w", in.Repo, in.PR, err)
 	}
 	out, err := o.runner.Run(ctx, "git", []string{"-C", repo.Path, "rev-parse", "refs/remotes/" + base})
 	if err != nil {
-		return Workspace{}, fmt.Errorf("read the fetched head of %s#%d: %w", in.Repo, in.PR, err)
+		return orcaRepo{}, "", fmt.Errorf("read the fetched head of %s#%d: %w", in.Repo, in.PR, err)
 	}
 	if head := strings.TrimSpace(string(out)); head != in.HeadSHA {
-		return Workspace{}, fmt.Errorf("the head of %s#%d moved from %s, whose CI Settled, to %s", in.Repo, in.PR, in.HeadSHA, head)
+		return orcaRepo{}, "", fmt.Errorf("the head of %s#%d moved from %s, whose CI Settled, to %s", in.Repo, in.PR, in.HeadSHA, head)
 	}
-	return o.create(ctx, repo, "review-pr-"+n, "--base-branch", base)
+	return repo, base, nil
 }
 
 // create creates a new Orca worktree called name in repo, with a fresh

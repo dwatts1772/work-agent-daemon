@@ -293,8 +293,8 @@ func prList(fx testharness.Fixture, args []string) {
 	fmt.Println(string(data))
 }
 
-// prView reports a PR's head commit, the checks on it, and its reviews and
-// comments.
+// prView reports a PR's state, head commit, the checks on it, and its
+// reviews and comments.
 func prView(fx testharness.Fixture, number string, args []string) {
 	fs := flag.NewFlagSet("pr view", flag.ContinueOnError)
 	repo := fs.String("repo", "", "")
@@ -314,7 +314,7 @@ func prView(fx testharness.Fixture, number string, args []string) {
 		for _, c := range p.Comments {
 			comments = append(comments, map[string]any{"id": c.ID, "author": map[string]any{"login": c.Author}, "authorAssociation": c.AuthorAssociation, "body": c.Body, "createdAt": c.CreatedAt})
 		}
-		out, _ := json.Marshal(map[string]any{"headRefOid": p.HeadSHA, "statusCheckRollup": rollup(p.Checks), "reviews": reviews, "comments": comments})
+		out, _ := json.Marshal(map[string]any{"state": p.State, "headRefOid": p.HeadSHA, "statusCheckRollup": rollup(p.Checks), "reviews": reviews, "comments": comments})
 		fmt.Println(string(out))
 		return
 	}

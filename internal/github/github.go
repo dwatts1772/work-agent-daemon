@@ -236,6 +236,43 @@ func (c *Client) ReviewRequests(ctx context.Context, repo string) ([]ReviewReque
 	return requests, nil
 }
 
+// Removal is how a pull request's review request ended: whether the PR was
+// merged or closed, and when the Operator last submitted a review on it,
+// zero if never.
+type Removal struct {
+	Ended              bool
+	OperatorReviewedAt time.Time
+}
+
+// ReviewRequestRemoval reads how the review request on PR number in repo,
+// which no longer requests the Operator's review, ended.
+func (c *Client) ReviewRequestRemoval(ctx context.Context, repo string, number int) (Removal, error) {
+	out, err := c.gh(ctx, "pr", "view", strconv.Itoa(number), "--repo", repo, "--json", "state,reviews")
+	if err != nil {
+		return Removal{}, err
+	}
+	var pr struct {
+		State   PRState `json:"state"`
+		Reviews []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			State       string    `json:"state"`
+			SubmittedAt time.Time `json:"submittedAt"`
+		} `json:"reviews"`
+	}
+	if err := json.Unmarshal(out, &pr); err != nil {
+		return Removal{}, fmt.Errorf("parse pull request %s#%d: %w", repo, number, err)
+	}
+	r := Removal{Ended: pr.State != PROpen}
+	for _, rv := range pr.Reviews {
+		if strings.EqualFold(rv.Author.Login, c.account) && !strings.EqualFold(rv.State, "PENDING") && rv.SubmittedAt.After(r.OperatorReviewedAt) {
+			r.OperatorReviewedAt = rv.SubmittedAt
+		}
+	}
+	return r, nil
+}
+
 // IssueClosed reports whether issue number in repo is closed.
 func (c *Client) IssueClosed(ctx context.Context, repo string, number int) (bool, error) {
 	out, err := c.gh(ctx, "issue", "view", strconv.Itoa(number), "--repo", repo, "--json", "state")

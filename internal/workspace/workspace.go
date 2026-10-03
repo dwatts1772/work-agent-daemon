@@ -46,6 +46,7 @@ type Backend interface {
 	Available(ctx context.Context) (bool, error)
 	CreateForIssue(ctx context.Context, in CreateInput) (Workspace, error)
 	CreateForReview(ctx context.Context, in ReviewInput) (Workspace, error)
+	FetchReviewHead(ctx context.Context, in ReviewInput) error
 	AgentState(ctx context.Context, ws Workspace) (AgentState, error)
 	Wake(ctx context.Context, ws Workspace, prompt string) error
 	Exists(ctx context.Context, ws Workspace) (bool, error)

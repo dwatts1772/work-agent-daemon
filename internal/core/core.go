@@ -155,6 +155,9 @@ func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflo
 	next, reviewActions := workflow.Reconcile(next, reviews)
 	actions = append(actions, reviewActions...)
 
+	next, removedActions := workflow.Reconcile(next, d.observeRemovedRequests(ctx, next, reviews, now))
+	actions = append(actions, removedActions...)
+
 	// An issue that cannot be read, such as a deleted one, is treated as no
 	// longer Eligible: it is Paused, never lost, and never fails the Tick.
 	missing := workflow.Ineligible(next, assigned, now)
@@ -240,11 +243,32 @@ func (d *Daemon) observeReviewRequests(ctx context.Context, now time.Time) ([]wo
 		for _, r := range requests {
 			events = append(events, workflow.Event{
 				Type: workflow.ReviewRequested, Repo: r.Repo, Title: r.Title, PR: r.Number, PRURL: r.URL,
-				HeadSHA: r.CI.HeadSHA, Settled: r.CI.Settled, Failed: r.CI.Failed, Reviewer: d.cfg.GitHub.Account, ObservedAt: now,
+				HeadSHA: r.CI.HeadSHA, Settled: r.CI.Settled, Failed: r.CI.Failed, Reviewer: d.cfg.GitHub.Account,
+				QuietPeriod: d.cfg.QuietPeriod(), ObservedAt: now,
 			})
 		}
 	}
 	return events, nil
+}
+
+// observeRemovedRequests turns every tracked Review Request missing from
+// requested, a complete observation of the review requests, into an event
+// saying how its request ended. A PR that cannot be read is skipped with a
+// warning and observed again next Tick; it never fails the Tick.
+func (d *Daemon) observeRemovedRequests(ctx context.Context, st workflow.State, requested []workflow.Event, now time.Time) []workflow.Event {
+	var events []workflow.Event
+	for _, w := range workflow.Unrequested(st, requested) {
+		r, err := d.github.ReviewRequestRemoval(ctx, w.Repo, w.PR)
+		if err != nil {
+			d.log.Warn("cannot tell how a review request ended; retrying next Tick", "item", w.ID, "err", err)
+			continue
+		}
+		events = append(events, workflow.Event{
+			Type: workflow.ReviewRequestRemoved, Repo: w.Repo, PR: w.PR, PRURL: w.PRURL,
+			Ended: r.Ended, OperatorReviewedAt: r.OperatorReviewedAt, ObservedAt: now,
+		})
+	}
+	return events
 }
 
 // prEvent decides what w's PRs, newest first, say about it: the linked PR
@@ -382,6 +406,12 @@ func (d *Daemon) wake(ctx context.Context, st workflow.State, item workflow.Work
 		if agent == workspace.AgentWorking {
 			d.log.Info("agent is working; holding the Wake until a later Tick", "item", item.ID, "reason", reason)
 			return workflow.Held(st, item.ID, reason, workflow.HoldAgentWorking, time.Now().UTC())
+		}
+		if reason == workflow.WakeReview && item.State != workflow.PendingWorkspace {
+			// A re-review: refresh the pull ref to the head whose CI Settled.
+			if err := d.workspaces.FetchReviewHead(ctx, workspace.ReviewInput{Repo: item.Repo, PR: item.PR, HeadSHA: item.HeadSHA}); err != nil {
+				return d.failed(st, item.ID, "fetch the PR head", err)
+			}
 		}
 	}
 	prompt := workflow.WakePrompt(d.cfg.Claude.EntrySkill, reason, item.WakeRef(reason))

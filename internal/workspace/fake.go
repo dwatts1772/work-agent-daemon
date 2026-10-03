@@ -13,6 +13,7 @@ type Fake struct {
 	Unavailable bool
 	Created     []Workspace
 	Wakes       []FakeWake
+	Fetches     []ReviewInput
 	States      map[string]AgentState // keyed by OrcaIdentityKey
 }
 
@@ -39,6 +40,14 @@ func (f *Fake) CreateForIssue(_ context.Context, in CreateInput) (Workspace, err
 // CreateForReview records and returns a made-up Review Workspace.
 func (f *Fake) CreateForReview(_ context.Context, in ReviewInput) (Workspace, error) {
 	return f.create(in.Repo, fmt.Sprintf("review-pr-%d", in.PR))
+}
+
+// FetchReviewHead records the fetch.
+func (f *Fake) FetchReviewHead(_ context.Context, in ReviewInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Fetches = append(f.Fetches, in)
+	return nil
 }
 
 func (f *Fake) create(repo, name string) (Workspace, error) {
