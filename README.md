@@ -184,7 +184,9 @@ Owned Issue:    PENDING_WORKSPACE → IN_PROGRESS → WAITING_FOR_CI ⇄ ADDRESS
 Review Request: PENDING_WORKSPACE → REVIEWING → REVIEWED (findings held for you) → DONE when merged/closed
 ```
 
-Feedback and approvals count only from reviewers other than the Operator (Claude comments as you), so `READY_TO_MERGE` needs an approval from another write-access reviewer; on a repo where you are the only collaborator a green PR stays `WAITING_FOR_REVIEW` ([#37](https://github.com/dwatts1772/work-agent-daemon/issues/37)).
+`READY_TO_MERGE` needs CI Settled green, no actionable feedback and no standing change request; it needs no approval, because Claude's PR is a draft that only you mark ready. It is the hand-off to you: mark it ready, get whatever review your branch protection asks for, merge. GitHub still enforces branch protection when you merge.
+
+Feedback counts only from write-access reviewers other than the Operator, or a `feedbackBots` entry: Claude comments as you, so counting your own comments would Wake Claude on its own replies. On a repo where you are the only collaborator, a feedback Wake comes only from a configured bot (or you steer Claude in its Workspace yourself), and no Review Request ever exists, since one needs another developer's PR ([#37](https://github.com/dwatts1772/work-agent-daemon/issues/37)).
 
 The daemon never merges, force-pushes, deploys, marks a PR ready for review or submits a review: those stay with you. It never deletes branches or Workspaces either; `DONE` Review Workspaces are listed in the status window as safe to clean up.
 

@@ -204,10 +204,10 @@ type ReviewRequestState =
 PENDING_WORKSPACE → IN_PROGRESS          Workspace created + Woken
 IN_PROGRESS       → WAITING_FOR_CI       PR discovered
 WAITING_FOR_CI    → ADDRESSING_FEEDBACK  CI Settled with failure (Woken)
-WAITING_FOR_CI    → WAITING_FOR_REVIEW   CI Settled green, feedback outstanding / no approval yet
+WAITING_FOR_CI    → WAITING_FOR_REVIEW   CI Settled green, feedback outstanding / change request standing
 WAITING_FOR_CI    → READY_TO_MERGE       CI Settled green, no actionable feedback
 WAITING_FOR_REVIEW→ ADDRESSING_FEEDBACK  actionable feedback (Woken)
-WAITING_FOR_REVIEW→ READY_TO_MERGE       review + CI conditions satisfied
+WAITING_FOR_REVIEW→ READY_TO_MERGE       feedback addressed, no change request standing, CI green
 ADDRESSING_FEEDBACK → WAITING_FOR_CI     head SHA changed
 READY_TO_MERGE    → WAITING_FOR_CI       head SHA changed
 any               → DONE                 PR merged or closed / issue closed
@@ -701,6 +701,7 @@ Resolved during design (previously open questions):
 16. **Language and shell** — Go core, Wails v3 tray app + headless CLI, start at login (ADR-0004).
 17. **Feedback authors** — only write-access reviewers or configured bots can trigger a feedback Wake.
 18. **Prior art** — `coding-agent-loop` is a design reference only; it is unlicensed, so no code is copied.
+19. **No approval for `READY_TO_MERGE`** — green, Settled CI with no actionable feedback and no standing change request is `READY_TO_MERGE`; no approval is required, even where branch protection requires reviews. The PR is a draft only the Operator marks ready, so `READY_TO_MERGE` is the hand-off to the Operator, not a merge; GitHub enforces branch protection at merge (#37).
 
 ## 22. Guiding principles
 

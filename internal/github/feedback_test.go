@@ -75,7 +75,7 @@ func TestOnlyReviewsAskingForSomethingAreFeedback(t *testing.T) {
 	}
 }
 
-func TestApprovedNeedsAnApprovalAndNoOutstandingChangeRequest(t *testing.T) {
+func TestAChangeRequestStandsUntilItsReviewerApprovesOrItIsDismissed(t *testing.T) {
 	r := func(author, assoc, state string) Review {
 		return Review{ID: author + state, Author: author, AuthorAssociation: assoc, State: state, SubmittedAt: at}
 	}
@@ -83,18 +83,19 @@ func TestApprovedNeedsAnApprovalAndNoOutstandingChangeRequest(t *testing.T) {
 		reviews []Review
 		want    bool
 	}{
-		"no reviews":                 {nil, false},
-		"approved":                   {[]Review{r("alice", "OWNER", "APPROVED")}, true},
-		"approved after changes":     {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "APPROVED")}, true},
-		"comment keeps the approval": {[]Review{r("alice", "OWNER", "APPROVED"), r("alice", "OWNER", "COMMENTED")}, true},
-		"changes after approval":     {[]Review{r("alice", "OWNER", "APPROVED"), r("alice", "OWNER", "CHANGES_REQUESTED")}, false},
-		"another reviewer objects":   {[]Review{r("alice", "OWNER", "APPROVED"), r("bob", "MEMBER", "CHANGES_REQUESTED")}, false},
-		"approval dismissed":         {[]Review{r("alice", "OWNER", "APPROVED"), r("alice", "OWNER", "DISMISSED")}, false},
-		"drive-by approval":          {[]Review{r("eve", "NONE", "APPROVED")}, false},
-		"drive-by change request":    {[]Review{r("alice", "OWNER", "APPROVED"), r("eve", "NONE", "CHANGES_REQUESTED")}, true},
+		"no reviews":                    {nil, false},
+		"approved":                      {[]Review{r("alice", "OWNER", "APPROVED")}, false},
+		"changes requested":             {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED")}, true},
+		"approved after changes":        {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "APPROVED")}, false},
+		"a comment keeps the request":   {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "COMMENTED")}, true},
+		"changes after approval":        {[]Review{r("alice", "OWNER", "APPROVED"), r("alice", "OWNER", "CHANGES_REQUESTED")}, true},
+		"another reviewer objects":      {[]Review{r("alice", "OWNER", "APPROVED"), r("bob", "MEMBER", "CHANGES_REQUESTED")}, true},
+		"change request dismissed":      {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "DISMISSED")}, false},
+		"drive-by change request":       {[]Review{r("eve", "NONE", "CHANGES_REQUESTED")}, false},
+		"the Operator's change request": {[]Review{r("op", "OWNER", "CHANGES_REQUESTED")}, false},
 	} {
 		if _, got := Triage("op", nil, tc.reviews, nil); got != tc.want {
-			t.Errorf("%s: approved = %v, want %v", name, got, tc.want)
+			t.Errorf("%s: changes requested = %v, want %v", name, got, tc.want)
 		}
 	}
 }

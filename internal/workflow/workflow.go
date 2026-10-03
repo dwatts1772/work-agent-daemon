@@ -41,7 +41,7 @@ const (
 	// CI has not Settled green.
 	WaitingForCI ItemState = "WAITING_FOR_CI"
 	// WaitingForReview is an Owned Issue whose PR has green, Settled CI but
-	// outstanding feedback or no approval yet.
+	// outstanding feedback or a standing change request.
 	WaitingForReview ItemState = "WAITING_FOR_REVIEW"
 	// AddressingFeedback is an Owned Issue Woken for feedback or a CI
 	// failure on its PR, until the head SHA changes.
@@ -293,10 +293,10 @@ type Event struct {
 	Settled bool
 	Failed  bool
 	// Feedback is every review and comment on the PR that counts as
-	// feedback; Approved is whether the PR is approved with no change
-	// requested.
-	Feedback []Feedback
-	Approved bool
+	// feedback; ChangesRequested is whether a reviewer's change request
+	// still stands. No approval is needed (#37).
+	Feedback         []Feedback
+	ChangesRequested bool
 	// QuietPeriod is how long comments must go quiet before the daemon Wakes
 	// the Work Item for them.
 	QuietPeriod time.Duration
@@ -529,8 +529,10 @@ func reduceReviewRequestRemoved(state State, event Event) []Action {
 //     While another Wake is due the failure waits for a later Tick.
 //   - New feedback holding a submitted review, or new comments whose newest
 //     is a Quiet Period old, one feedback Wake for the whole batch.
-//   - CI Settled green moves the item to ReadyToMerge when the PR is
-//     approved with no feedback outstanding, otherwise to WaitingForReview.
+//   - CI Settled green moves the item to ReadyToMerge when no feedback is
+//     outstanding and no change request stands, otherwise to
+//     WaitingForReview. No approval is needed: the PR is a draft only the
+//     Operator marks ready, so READY_TO_MERGE is the hand-off to them (#37).
 func reducePR(state State, event Event) []Action {
 	w, i := state.find(event.Ref())
 	if i < 0 || !w.WatchesPR() || w.PR != event.PR || event.HeadSHA == "" {
@@ -563,7 +565,7 @@ func reducePR(state State, event Event) []Action {
 	}
 	if event.Settled && !event.Failed && w.State != AddressingFeedback {
 		target := WaitingForReview
-		if event.Approved && w.DueWake == "" && len(fresh) == 0 {
+		if !event.ChangesRequested && w.DueWake == "" && len(fresh) == 0 {
 			target = ReadyToMerge
 		}
 		if w.State != target {
