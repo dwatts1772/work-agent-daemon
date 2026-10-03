@@ -1,0 +1,11 @@
+{
+  "name": "work-agent",
+  "owner": { "name": "dwatts1772" },
+  "plugins": [
+    {
+      "name": "work-agent",
+      "source": "./",
+      "description": "Entry Skill /work-item for the work-agent daemon."
+    }
+  ]
+}
