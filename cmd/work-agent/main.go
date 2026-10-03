@@ -94,16 +94,19 @@ func tick(stdout, stderr io.Writer, log *logging.Logger, cfg config.Config, act 
 }
 
 func printResult(w io.Writer, res core.Result) {
-	if res.Eligible == 0 {
-		fmt.Fprintln(w, "No Eligible issues.")
-		return
-	}
 	if len(res.Actions) == 0 {
-		fmt.Fprintf(w, "No changes: %d Eligible issues, all already Owned Issues.\n", res.Eligible)
+		if res.Eligible == 0 {
+			fmt.Fprintln(w, "No Eligible issues.")
+		} else {
+			fmt.Fprintf(w, "No changes: %d Eligible issues, all already Owned Issues.\n", res.Eligible)
+		}
 		return
 	}
 	for _, a := range res.Actions {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", a.Type, a.Item.ID, a.Item.State, a.Item.Title, a.Item.IssueURL)
+	}
+	if res.Held {
+		fmt.Fprintln(w, "Held: Orca is unavailable; Workspace actions will be retried on the next Tick. Start Orca to continue.")
 	}
 }
 

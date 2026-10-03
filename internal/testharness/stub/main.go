@@ -24,17 +24,21 @@ func main() {
 	args := os.Args[1:]
 	record(dir, bin, args)
 
-	if bin != "gh" {
+	data, err := os.ReadFile(filepath.Join(dir, testharness.FixtureFile))
+	if bin != "gh" && (bin != "orca" || os.IsNotExist(err)) {
 		fmt.Printf("stub %s\n", bin)
 		return
 	}
 	var fx testharness.Fixture
-	data, err := os.ReadFile(filepath.Join(dir, testharness.FixtureFile))
 	if err == nil {
 		err = json.Unmarshal(data, &fx)
 	}
 	if err != nil {
-		fail(1, "stub gh: fixture: %v", err)
+		fail(1, "stub %s: fixture: %v", bin, err)
+	}
+	if bin == "orca" {
+		orca(dir, fx.Orca, args)
+		return
 	}
 	gh(fx, args)
 }

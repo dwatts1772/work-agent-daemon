@@ -28,7 +28,7 @@ func DefaultSearchDirs() []string {
 		return []string{
 			filepath.Join(os.Getenv("ProgramFiles"), "GitHub CLI"),
 			filepath.Join(os.Getenv("ProgramFiles"), "Git", "cmd"),
-			filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "Orca"),
+			filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "orca", "resources", "bin"),
 			filepath.Join(home, ".local", "bin"),
 			filepath.Join(os.Getenv("APPDATA"), "npm"),
 		}
@@ -47,27 +47,41 @@ func DefaultSearchDirs() []string {
 func ResolveBinaries(overrides map[string]string, searchDirs []string) (map[string]string, error) {
 	resolved := map[string]string{}
 	for _, name := range Binaries {
+		file := lookupName(name)
 		if path, ok := overrides[name]; ok {
 			if _, err := os.Stat(path); err != nil {
 				return nil, fmt.Errorf("binaries.%s: %w", name, err)
 			}
+			if file != name && !strings.EqualFold(filepath.Base(path), file) {
+				return nil, fmt.Errorf("binaries.%s: %q must be %s", name, path, file)
+			}
 			resolved[name] = path
 			continue
 		}
-		if path, err := exec.LookPath(name); err == nil {
+		if path, err := exec.LookPath(file); err == nil {
 			if abs, err := filepath.Abs(path); err == nil {
 				resolved[name] = abs
 				continue
 			}
 		}
 		for _, dir := range searchDirs {
-			if path, err := exec.LookPath(filepath.Join(dir, name)); err == nil {
+			if path, err := exec.LookPath(filepath.Join(dir, file)); err == nil {
 				resolved[name] = path
 				break
 			}
 		}
 	}
 	return resolved, nil
+}
+
+// lookupName is the file to look for when resolving name. On Windows orca
+// must be orca.exe: the orca.cmd shim installed beside it refuses to forward
+// message bodies, and PATH lookup could otherwise find the shim first.
+func lookupName(name string) string {
+	if runtime.GOOS == "windows" && name == "orca" {
+		return "orca.exe"
+	}
+	return name
 }
 
 // Runner executes allowlisted commands against resolved binaries.

@@ -26,6 +26,32 @@ type Fixture struct {
 	// EchoTokenOnError makes failing gh calls print GH_TOKEN to stderr, as
 	// a hostile stand-in for any tool that leaks its credentials in errors.
 	EchoTokenOnError bool `json:"echoTokenOnError"`
+	// Orca is the Orca runtime the stub orca simulates; nil means Orca is
+	// not running.
+	Orca *Orca `json:"orca,omitempty"`
+}
+
+// Orca is a running Orca runtime. Worktrees the stub creates persist in
+// OrcaWorktreesFile across fixture changes, as they do across Orca restarts.
+type Orca struct {
+	// Repos maps each registered repo's Orca id to its GitHub "owner/name".
+	Repos map[string]string `json:"repos"`
+	// AgentStates maps a worktree name to the states of its agents, as
+	// `worktree ps` reports them.
+	AgentStates map[string][]string `json:"agentStates,omitempty"`
+}
+
+// OrcaWorktreesFile holds the worktrees the stub orca has created.
+const OrcaWorktreesFile = "orca-worktrees.json"
+
+// OrcaWorktree is one worktree the stub orca created.
+type OrcaWorktree struct {
+	IdentityKey string `json:"identityKey"`
+	RepoID      string `json:"repoId"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Branch      string `json:"branch"`
+	Issue       int    `json:"issue"`
 }
 
 type Issue struct {

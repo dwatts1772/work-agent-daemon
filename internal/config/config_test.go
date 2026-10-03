@@ -44,6 +44,7 @@ func TestLoadReadsOperatorReposLabelAndBinaryOverrides(t *testing.T) {
 			Repos:            []string{"org/a", "org/b"},
 			EligibilityLabel: "agent-ready",
 		},
+		Claude:   Claude{EntrySkill: "/work-item"},
 		Binaries: map[string]string{"gh": gh, "git": git, "orca": orca, "claude": claude},
 	}
 	if !reflect.DeepEqual(cfg, want) {
@@ -53,13 +54,15 @@ func TestLoadReadsOperatorReposLabelAndBinaryOverrides(t *testing.T) {
 
 func TestLoadRejectsIncompleteConfig(t *testing.T) {
 	cases := map[string]struct{ body, wantErr string }{
-		"no account":   {`{"github":{"repos":["o/r"],"eligibilityLabel":"l"}}`, "github.account"},
-		"no repos":     {`{"github":{"account":"a","eligibilityLabel":"l"}}`, "github.repos"},
-		"bad repo":     {`{"github":{"account":"a","repos":["noslash"],"eligibilityLabel":"l"}}`, "noslash"},
-		"no label":     {`{"github":{"account":"a","repos":["o/r"]}}`, "github.eligibilityLabel"},
-		"bad json":     {`{`, "config"},
-		"unknown bin":  {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"binaries":{"sh":"sh"}}`, "sh"},
-		"relative bin": {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"binaries":{"gh":"gh"}}`, "absolute"},
+		"no account":           {`{"github":{"repos":["o/r"],"eligibilityLabel":"l"}}`, "github.account"},
+		"no repos":             {`{"github":{"account":"a","eligibilityLabel":"l"}}`, "github.repos"},
+		"bad repo":             {`{"github":{"account":"a","repos":["noslash"],"eligibilityLabel":"l"}}`, "noslash"},
+		"no label":             {`{"github":{"account":"a","repos":["o/r"]}}`, "github.eligibilityLabel"},
+		"bad json":             {`{`, "config"},
+		"unknown bin":          {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"binaries":{"sh":"sh"}}`, "sh"},
+		"relative bin":         {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"binaries":{"gh":"gh"}}`, "absolute"},
+		"shell in entry skill": {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"claude":{"entrySkill":"/x; rm -rf ~"}}`, "claude.entrySkill"},
+		"spaced entry skill":   {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"claude":{"entrySkill":"/a b"}}`, "claude.entrySkill"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -75,5 +78,15 @@ func TestLoadReportsMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "missing.json"))
 	if err == nil {
 		t.Fatal("want error for missing file")
+	}
+}
+
+func TestLoadReadsACustomEntrySkill(t *testing.T) {
+	cfg, err := Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"claude":{"entrySkill":"/my-plugin:entry"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.EntrySkill != "/my-plugin:entry" {
+		t.Errorf("EntrySkill = %q", cfg.Claude.EntrySkill)
 	}
 }
