@@ -301,10 +301,14 @@ type Event struct {
 	Reviewer string
 	// Ended is set on a ReviewRequestRemoved event when the PR was merged
 	// or closed; OperatorReviewedAt is when the Operator last submitted a
-	// review on it, zero if never.
-	Ended              bool
-	OperatorReviewedAt time.Time
-	ObservedAt         time.Time
+	// review on it, zero if never, and OperatorReviewedSHA the head that
+	// review was of. StillRequested is set when the PR itself still
+	// requests the Operator's review, though the listing missed it.
+	Ended               bool
+	OperatorReviewedAt  time.Time
+	OperatorReviewedSHA string
+	StillRequested      bool
+	ObservedAt          time.Time
 }
 
 // Ref is the "owner/name#number" the event is about: the PR of a
@@ -449,12 +453,13 @@ func reduceReReview(w WorkItem, event Event) []Action {
 		w.ReviewedHeadSHA = w.HeadSHA
 	}
 	var last ActionType
-	switch {
-	case w.HeadSHA != event.HeadSHA:
+	if w.HeadSHA != event.HeadSHA {
 		w.HeadSHA, w.HeadSeenAt = event.HeadSHA, event.ObservedAt
 		w.DueWake, w.HeldWake = "", nil
 		last = HeadChanged
-	case w.State == Reviewed && w.ReviewedHeadSHA == w.HeadSHA:
+	}
+	if w.State == Reviewed && w.ReviewedHeadSHA != "" {
+		// Re-requested: the Operator's review no longer answers it.
 		w.ReviewedHeadSHA, w.HeadSeenAt = "", event.ObservedAt
 		last = ReviewReRequested
 	}
@@ -472,13 +477,15 @@ func reduceReReview(w WorkItem, event Event) []Action {
 // reduceReviewRequestRemoved ends a Review Request whose PR no longer
 // requests the Operator's review. A request the Operator's own review
 // cleared — one submitted after the current request was first seen — leaves
-// a Woken item Reviewed, so a later re-request reviews it again. Any other
+// a Woken item Reviewed at the head that review was of, so a later
+// re-request reviews it again. A request an open PR itself still holds is
+// not removed. Any other
 // removal, or the PR being merged or closed, moves it to Done from any
 // state, dropping any due or Held Wake: it is never Woken again. Its
 // Workspace is kept.
 func reduceReviewRequestRemoved(state State, event Event) []Action {
 	w, i := state.find(event.Ref())
-	if i < 0 || w.Kind != KindReviewRequest || w.State == Done {
+	if i < 0 || w.Kind != KindReviewRequest || w.State == Done || event.StillRequested && !event.Ended {
 		return nil
 	}
 	resting := w.State
@@ -488,10 +495,14 @@ func reduceReviewRequestRemoved(state State, event Event) []Action {
 	w.DueWake, w.HeldWake = "", nil
 	w.UpdatedAt = event.ObservedAt
 	if !event.Ended && event.OperatorReviewedAt.After(w.HeadSeenAt) && (resting == Reviewing || resting == Reviewed) {
-		if resting == Reviewed && w.ReviewedHeadSHA == w.HeadSHA {
+		reviewed := event.OperatorReviewedSHA
+		if reviewed == "" {
+			reviewed = w.HeadSHA
+		}
+		if resting == Reviewed && w.ReviewedHeadSHA == reviewed {
 			return nil
 		}
-		w.ReviewedHeadSHA = w.HeadSHA
+		w.ReviewedHeadSHA = reviewed
 		if w.Pause != nil {
 			w.Pause.ResumeTo = Reviewed
 		} else {

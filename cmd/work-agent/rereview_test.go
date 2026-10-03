@@ -131,18 +131,20 @@ func TestRapidPushesInsideTheQuietPeriodProduceOneReReview(t *testing.T) {
 func TestARequestClearedByTheOperatorsReviewLeavesItReviewedUntilReRequested(t *testing.T) {
 	c := reviewing(t)
 
-	// The Operator submits the review Claude prepared; GitHub clears the
-	// request.
+	// The Operator submits the review Claude prepared of rrr; GitHub
+	// clears the request.
+	review := reviewBy("PRR_1", operator, "MEMBER", "COMMENTED")
+	review.Commit = "rrr"
 	c.stubs.SetFixture(t, withPR333("rrr", func(pr *testharness.PullRequest) {
 		pr.ReviewRequests = nil
-		pr.Reviews = []testharness.Review{reviewBy("PRR_1", operator, "MEMBER", "COMMENTED")}
+		pr.Reviews = []testharness.Review{review}
 	}))
 	stdout := c.mustTick(t)
 	quietPeriodPasses(t, c)
 	c.mustTick(t)
 
-	if got := reviewItems(t, c); len(got) != 1 || got[0].State != workflow.Reviewed {
-		t.Fatalf("Review Requests = %+v, want org/a#333 REVIEWED", got)
+	if got := reviewItems(t, c); len(got) != 1 || got[0].State != workflow.Reviewed || got[0].ReviewedHeadSHA != "rrr" {
+		t.Fatalf("Review Requests = %+v, want org/a#333 REVIEWED at rrr", got)
 	}
 	if !strings.Contains(stdout, "REVIEW_SUBMITTED\torg/a#333") {
 		t.Errorf("stdout does not report the Operator's review:\n%s", stdout)
@@ -153,7 +155,7 @@ func TestARequestClearedByTheOperatorsReviewLeavesItReviewedUntilReRequested(t *
 
 	// The author asks for another look at the same head.
 	c.stubs.SetFixture(t, withPR333("rrr", func(pr *testharness.PullRequest) {
-		pr.Reviews = []testharness.Review{reviewBy("PRR_1", operator, "MEMBER", "COMMENTED")}
+		pr.Reviews = []testharness.Review{review}
 	}))
 	c.mustTick(t)
 	if got := reviewWakes(t, c); len(got) != 1 {

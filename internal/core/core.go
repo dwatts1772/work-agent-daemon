@@ -265,7 +265,8 @@ func (d *Daemon) observeRemovedRequests(ctx context.Context, st workflow.State, 
 		}
 		events = append(events, workflow.Event{
 			Type: workflow.ReviewRequestRemoved, Repo: w.Repo, PR: w.PR, PRURL: w.PRURL,
-			Ended: r.Ended, OperatorReviewedAt: r.OperatorReviewedAt, ObservedAt: now,
+			Ended: r.Ended, OperatorReviewedAt: r.OperatorReviewedAt, OperatorReviewedSHA: r.OperatorReviewedSHA,
+			StillRequested: r.StillRequested, ObservedAt: now,
 		})
 	}
 	return events

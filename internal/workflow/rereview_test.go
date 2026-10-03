@@ -174,3 +174,47 @@ func TestARequestEndedAnyOtherWayIsDoneWithoutAWake(t *testing.T) {
 		}
 	}
 }
+
+func TestAnOperatorReviewOfAnEarlierHeadLeavesTheNewHeadToReReviewOnReRequest(t *testing.T) {
+	st := reviewing()
+	pushed := t0.Add(10 * time.Minute)
+	st, _ = Reconcile(st, []Event{requestedAt("bbb", true, pushed), requestedAt("bbb", true, pushed.Add(quiet))})
+	st = Held(st, "org/a#333", WakeReview, HoldAgentWorking, pushed.Add(quiet))
+
+	// The Operator submits the review of aaa, clearing the request.
+	e := removed(false, pushed.Add(quiet+time.Minute), pushed.Add(quiet+2*time.Minute))
+	e.OperatorReviewedSHA = "aaa"
+	st, _ = Reconcile(st, []Event{e})
+	if item, _ := st.Item("org/a#333"); item.State != Reviewed || wakes(st) != nil {
+		t.Fatalf("state = %s, Wakes %v; want REVIEWED, nothing Woken while unrequested", item.State, wakes(st))
+	}
+	if again, _ := Reconcile(st, []Event{e}); !reflect.DeepEqual(again, st) {
+		t.Fatalf("re-observing the cleared request changed the item")
+	}
+
+	reRequested := pushed.Add(time.Hour)
+	st, _ = Reconcile(st, []Event{requestedAt("bbb", true, reRequested)})
+	if got := wakes(st); got != nil {
+		t.Fatalf("Wakes %v inside the Quiet Period of the re-request", got)
+	}
+	st, _ = Reconcile(st, []Event{requestedAt("bbb", true, reRequested.Add(quiet))})
+	if got := wakes(st); !reflect.DeepEqual(got, []WakeReason{WakeReview}) {
+		t.Errorf("Wakes %v after the re-request went quiet, want one review Wake for bbb", got)
+	}
+}
+
+func TestARequestStillOnThePRIsNotEnded(t *testing.T) {
+	e := removed(false, time.Time{}, t0.Add(time.Hour))
+	e.StillRequested = true // missing from the search, still requested on the PR
+	if got := Reduce(reviewing(), e); got != nil {
+		t.Errorf("Reduce() = %+v, want nothing while the PR still requests the Operator", got)
+	}
+}
+
+func TestAnEndedPRIsDoneThoughItStillListsTheRequest(t *testing.T) {
+	e := removed(true, time.Time{}, t0.Add(time.Hour))
+	e.StillRequested = true
+	if got := Reduce(reviewing(), e); len(got) != 1 || got[0].Item.State != Done {
+		t.Errorf("Reduce() = %+v, want the Review Request DONE", got)
+	}
+}

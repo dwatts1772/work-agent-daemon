@@ -270,14 +270,7 @@ func prList(fx testharness.Fixture, args []string) {
 			continue
 		}
 		o := pr{Number: p.Number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", *repo, p.Number), State: p.State, Title: p.Title, HeadRefName: p.HeadRefName, HeadRefOid: p.HeadSHA, Body: p.Body,
-			ClosingIssuesReferences: []ref{}, ReviewRequests: []map[string]any{}, StatusCheckRollup: rollup(p.Checks)}
-		for _, r := range p.ReviewRequests {
-			if org, team, ok := strings.Cut(r, "/"); ok {
-				o.ReviewRequests = append(o.ReviewRequests, map[string]any{"__typename": "Team", "name": team, "slug": org + "/" + team})
-			} else {
-				o.ReviewRequests = append(o.ReviewRequests, map[string]any{"__typename": "User", "login": r})
-			}
-		}
+			ClosingIssuesReferences: []ref{}, ReviewRequests: reviewRequests(p), StatusCheckRollup: rollup(p.Checks)}
 		o.Author.Login = p.Author
 		for _, c := range p.ClosingIssues {
 			var r ref
@@ -293,8 +286,21 @@ func prList(fx testharness.Fixture, args []string) {
 	fmt.Println(string(data))
 }
 
-// prView reports a PR's state, head commit, the checks on it, and its
-// reviews and comments.
+// reviewRequests reports a PR's requested reviewers: users, and teams.
+func reviewRequests(p testharness.PullRequest) []map[string]any {
+	out := []map[string]any{}
+	for _, r := range p.ReviewRequests {
+		if org, team, ok := strings.Cut(r, "/"); ok {
+			out = append(out, map[string]any{"__typename": "Team", "name": team, "slug": org + "/" + team})
+		} else {
+			out = append(out, map[string]any{"__typename": "User", "login": r})
+		}
+	}
+	return out
+}
+
+// prView reports a PR's state, head commit, the checks on it, its reviews
+// and comments, and its requested reviewers.
 func prView(fx testharness.Fixture, number string, args []string) {
 	fs := flag.NewFlagSet("pr view", flag.ContinueOnError)
 	repo := fs.String("repo", "", "")
@@ -308,13 +314,13 @@ func prView(fx testharness.Fixture, number string, args []string) {
 		}
 		reviews := []map[string]any{}
 		for _, r := range p.Reviews {
-			reviews = append(reviews, map[string]any{"id": r.ID, "author": map[string]any{"login": r.Author}, "authorAssociation": r.AuthorAssociation, "body": r.Body, "state": r.State, "submittedAt": r.SubmittedAt})
+			reviews = append(reviews, map[string]any{"id": r.ID, "author": map[string]any{"login": r.Author}, "authorAssociation": r.AuthorAssociation, "body": r.Body, "state": r.State, "submittedAt": r.SubmittedAt, "commit": map[string]any{"oid": r.Commit}})
 		}
 		comments := []map[string]any{}
 		for _, c := range p.Comments {
 			comments = append(comments, map[string]any{"id": c.ID, "author": map[string]any{"login": c.Author}, "authorAssociation": c.AuthorAssociation, "body": c.Body, "createdAt": c.CreatedAt})
 		}
-		out, _ := json.Marshal(map[string]any{"state": p.State, "headRefOid": p.HeadSHA, "statusCheckRollup": rollup(p.Checks), "reviews": reviews, "comments": comments})
+		out, _ := json.Marshal(map[string]any{"state": p.State, "headRefOid": p.HeadSHA, "statusCheckRollup": rollup(p.Checks), "reviews": reviews, "comments": comments, "reviewRequests": reviewRequests(p)})
 		fmt.Println(string(out))
 		return
 	}
