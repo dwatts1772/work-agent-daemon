@@ -177,7 +177,7 @@ func childEnv(bin string, binaryDirs, extra []string) []string {
 		}
 		// Environment variable names are case-insensitive on Windows, where
 		// it is usually spelled Path.
-		if strings.EqualFold(key, "PATH") && (runtime.GOOS == "windows" || key == "PATH") {
+		if key == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(key, "PATH")) {
 			pathKey, path = key, value
 			continue
 		}

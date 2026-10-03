@@ -31,15 +31,24 @@ func configWith(t *testing.T, fx testharness.Fixture) (string, *testharness.Stub
 	t.Helper()
 	stubs := testharness.New(t)
 	stubs.SetFixture(t, fx)
-	data, _ := json.Marshal(map[string]any{
-		"github":   map[string]any{"account": operator, "repos": []string{"org/a"}, "eligibilityLabel": "agent-ready"},
-		"binaries": stubs.Paths,
-	})
+	return writeConfig(t, stubs.Paths), stubs
+}
+
+// writeConfig writes a config for the Operator with binaries, if any.
+func writeConfig(t *testing.T, binaries map[string]string) string {
+	t.Helper()
+	cfg := map[string]any{
+		"github": map[string]any{"account": operator, "repos": []string{"org/a"}, "eligibilityLabel": "agent-ready"},
+	}
+	if binaries != nil {
+		cfg["binaries"] = binaries
+	}
+	data, _ := json.Marshal(cfg)
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path, stubs
+	return path
 }
 
 func TestASecondInstanceRefusesToStart(t *testing.T) {

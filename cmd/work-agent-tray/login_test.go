@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,13 +42,7 @@ func tickOnce(t *testing.T, tr *tray) core.Status {
 func TestAfterALoginTheTrayAppTicksWithTheMinimalLoginPath(t *testing.T) {
 	stubs := testharness.New(t)
 	stubs.SetFixture(t, eligibleWorld(true))
-	data, _ := json.Marshal(map[string]any{
-		"github": map[string]any{"account": operator, "repos": []string{"org/a"}, "eligibilityLabel": "agent-ready"},
-	})
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	path := writeConfig(t, nil)
 	t.Setenv("PATH", t.TempDir())
 
 	tr, err := prepare(context.Background(), path, []string{stubs.Dir})

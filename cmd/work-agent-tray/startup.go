@@ -20,7 +20,7 @@ type autostart interface {
 
 // addStartAtLogin adds the "Start at login" toggle to the tray menu.
 func (t *tray) addStartAtLogin(menu *application.Menu, a autostart) {
-	on, err := startAtLogin(a)
+	on, err := a.IsEnabled()
 	if err != nil {
 		t.log.Error("reading start at login failed", "err", err)
 	}
@@ -37,11 +37,11 @@ func (t *tray) addStartAtLogin(menu *application.Menu, a autostart) {
 	})
 }
 
-func startAtLogin(a autostart) (bool, error) { return a.IsEnabled() }
-
 // setStartAtLogin registers or removes the login item. It starts this
 // binary by absolute path with this config's absolute path, since a login
-// item gets a minimal PATH and another working directory.
+// item gets a minimal PATH and another working directory. (Wails ignores the
+// arguments for a bundled .app on macOS 13+, which registers through
+// SMAppService; the tray app is not bundled, so it gets a LaunchAgent.)
 func (t *tray) setStartAtLogin(a autostart, on bool) error {
 	if !on {
 		return a.Disable()

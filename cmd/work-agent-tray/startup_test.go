@@ -46,14 +46,14 @@ func TestTogglingStartAtLoginRegistersThisConfigAndRemovesIt(t *testing.T) {
 	if got := items[loginItemID]; !slices.Equal(got, []string{"--config", path}) {
 		t.Errorf("registered %v, want [--config %s]", items, path)
 	}
-	if on, _ := startAtLogin(items); !on {
+	if on, _ := items.IsEnabled(); !on {
 		t.Error("start at login reads as off after turning it on")
 	}
 
 	if err := tr.setStartAtLogin(items, false); err != nil {
 		t.Fatal(err)
 	}
-	if on, _ := startAtLogin(items); on {
+	if on, _ := items.IsEnabled(); on {
 		t.Errorf("start at login still registered after turning it off: %v", items)
 	}
 }
