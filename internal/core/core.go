@@ -76,13 +76,16 @@ func (d *Daemon) DryRun(ctx context.Context, current workflow.State) (Result, er
 }
 
 func (d *Daemon) plan(ctx context.Context, current workflow.State) (workflow.State, Result, error) {
-	events, err := d.observe(ctx)
+	assigned, err := d.observe(ctx)
 	if err != nil {
 		return workflow.State{}, Result{}, err
 	}
+	// observe saw every allowlisted repo, so a tracked Owned Issue it did
+	// not report is no longer Eligible.
+	events := append(assigned, workflow.Ineligible(current, assigned, time.Now().UTC())...)
 	next, actions := workflow.Reconcile(current, events)
-	d.log.Info("tick", "eligible", len(events), "actions", len(actions))
-	return next, Result{Eligible: len(events), Actions: actions}, nil
+	d.log.Info("tick", "eligible", len(assigned), "actions", len(actions))
+	return next, Result{Eligible: len(assigned), Actions: actions}, nil
 }
 
 // observe turns the Eligible issues across the allowlisted repos into events.
