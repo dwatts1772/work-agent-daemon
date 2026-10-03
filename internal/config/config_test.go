@@ -87,6 +87,31 @@ func TestThePollIntervalDefaultsTo45Seconds(t *testing.T) {
 	}
 }
 
+func TestFeedbackSettings(t *testing.T) {
+	cfg, err := Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.QuietPeriod(); got != 5*time.Minute {
+		t.Errorf("QuietPeriod = %v, want the 5 minute default", got)
+	}
+
+	cfg, err = Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l","quietPeriodMinutes":2,"feedbackBots":["coderabbitai[bot]"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.QuietPeriod(); got != 2*time.Minute {
+		t.Errorf("QuietPeriod = %v, want 2m", got)
+	}
+	if !reflect.DeepEqual(cfg.GitHub.FeedbackBots, []string{"coderabbitai[bot]"}) {
+		t.Errorf("FeedbackBots = %q", cfg.GitHub.FeedbackBots)
+	}
+
+	if _, err := Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l","quietPeriodMinutes":-1}}`)); err == nil || !strings.Contains(err.Error(), "github.quietPeriodMinutes") {
+		t.Errorf("err = %v, want a negative Quiet Period rejected", err)
+	}
+}
+
 func TestLoadReportsMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "missing.json"))
 	if err == nil {
