@@ -34,6 +34,7 @@ var ghAllowed = map[string]bool{
 	"issue list": true,
 	"issue view": true,
 	"pr list":    true,
+	"pr view":    true,
 }
 
 func checkGH(args []string) error {

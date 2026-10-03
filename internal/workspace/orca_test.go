@@ -3,6 +3,8 @@ package workspace_test
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -21,8 +23,11 @@ func newOrca(t *testing.T, rt *testharness.Orca) (*workspace.Orca, *testharness.
 	stubs := testharness.New(t)
 	stubs.SetFixture(t, testharness.Fixture{Orca: rt})
 	runner := process.NewRunner(stubs.Paths, logging.New(io.Discard, io.Discard))
-	return workspace.NewOrca(runner), stubs
+	return workspace.NewOrca(runner, claudeDir(stubs)), stubs
 }
+
+// claudeDir is the Claude config directory of the test's Claude.
+func claudeDir(stubs *testharness.Stubs) string { return filepath.Join(stubs.Dir, "claude-config") }
 
 func running() *testharness.Orca {
 	return &testharness.Orca{Repos: map[string]string{"repo-a": "org/a", "repo-b": "org/b"}}
@@ -237,5 +242,112 @@ func TestWakeFailsWhenTheWorkspaceIsGone(t *testing.T) {
 
 	if err == nil {
 		t.Error("Wake into a missing Workspace succeeded")
+	}
+}
+
+// haveTranscript makes Claude's transcript of ws's session exist, as it does
+// once Claude has run with that session ID.
+func haveTranscript(t *testing.T, stubs *testharness.Stubs, ws workspace.Workspace) {
+	t.Helper()
+	dir := filepath.Join(claudeDir(stubs), "projects", "C--some-project")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ws.ClaudeSessionID+".jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func lastOrcaCall(t *testing.T, stubs *testharness.Stubs) []string {
+	t.Helper()
+	calls := stubs.Calls(t)
+	return calls[len(calls)-1].Args
+}
+
+func TestALaterWakeResumesTheWorkspacesClaudeConversationInANewTerminal(t *testing.T) {
+	orca, stubs := newOrca(t, running())
+	ws, err := orca.CreateForIssue(ctx, workspace.CreateInput{Repo: "org/a", Issue: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	haveTranscript(t, stubs, ws)
+
+	if err := orca.Wake(ctx, ws, "/work-item ci-failure org/a#60"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"terminal", "create",
+		"--worktree", "identity:" + ws.OrcaIdentityKey,
+		"--command", `claude --resume ` + ws.ClaudeSessionID + ` "/work-item ci-failure org/a#60"`,
+		"--json",
+	}
+	if got := lastOrcaCall(t, stubs); !slices.Equal(got, want) {
+		t.Errorf("orca %q\nwant %q", got, want)
+	}
+}
+
+func TestAWakeIsSentIntoALiveIdleClaude(t *testing.T) {
+	rt := running()
+	orca, stubs := newOrca(t, rt)
+	ws, err := orca.CreateForIssue(ctx, workspace.CreateInput{Repo: "org/a", Issue: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	haveTranscript(t, stubs, ws)
+	rt.AgentStates = map[string][]string{"issue-7": {"idle"}}
+	rt.Terminals = map[string][]testharness.OrcaTerminal{"issue-7": {{Handle: "term_shell"}, {Handle: "term_claude", AgentIdentity: "claude"}}}
+	stubs.SetFixture(t, testharness.Fixture{Orca: rt})
+
+	if err := orca.Wake(ctx, ws, "/work-item ci-failure org/a#60"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"terminal", "send", "--terminal", "term_claude", "--text", "/work-item ci-failure org/a#60", "--enter", "--json"}
+	if got := lastOrcaCall(t, stubs); !slices.Equal(got, want) {
+		t.Errorf("orca %q\nwant %q", got, want)
+	}
+	for _, c := range stubs.Calls(t) {
+		if c.Bin == "orca" && len(c.Args) > 1 && c.Args[0] == "terminal" && c.Args[1] == "create" {
+			t.Errorf("started another Claude beside the live one: orca %q", c.Args)
+		}
+	}
+}
+
+func TestAWakeIsNotTypedIntoAClaudeThatIsWaitingOnTheOperator(t *testing.T) {
+	rt := running()
+	orca, stubs := newOrca(t, rt)
+	ws, err := orca.CreateForIssue(ctx, workspace.CreateInput{Repo: "org/a", Issue: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	haveTranscript(t, stubs, ws)
+	rt.AgentStates = map[string][]string{"issue-7": {"waiting"}}
+	rt.Terminals = map[string][]testharness.OrcaTerminal{"issue-7": {{Handle: "term_claude", AgentIdentity: "claude"}}}
+	stubs.SetFixture(t, testharness.Fixture{Orca: rt})
+
+	if err := orca.Wake(ctx, ws, "/work-item ci-failure org/a#60"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := lastOrcaCall(t, stubs); !slices.Contains(got, `claude --resume `+ws.ClaudeSessionID+` "/work-item ci-failure org/a#60"`) {
+		t.Errorf("orca %q; want the conversation resumed in a new terminal", got)
+	}
+}
+
+func TestAWakeFallsBackToAFreshSessionWhenTheConversationCannotBeResumed(t *testing.T) {
+	orca, stubs := newOrca(t, running())
+	ws, err := orca.CreateForIssue(ctx, workspace.CreateInput{Repo: "org/a", Issue: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No transcript: Claude never ran in this session, or has cleaned it up.
+
+	if err := orca.Wake(ctx, ws, "/work-item ci-failure org/a#60"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := lastOrcaCall(t, stubs); !slices.Contains(got, `claude --session-id `+ws.ClaudeSessionID+` "/work-item ci-failure org/a#60"`) {
+		t.Errorf("orca %q; want a fresh session under the Workspace's session ID", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -22,12 +23,31 @@ type Runner interface {
 // Every call is `orca … --json`; it never launches Orca.
 type Orca struct {
 	runner Runner
+	// claudeDir is Claude's config directory, where it keeps the
+	// transcripts of the sessions it can resume.
+	claudeDir string
 }
 
 var _ Backend = (*Orca)(nil)
 
-// NewOrca returns the Orca adapter running orca through runner.
-func NewOrca(runner Runner) *Orca { return &Orca{runner: runner} }
+// NewOrca returns the Orca adapter running orca through runner, for a
+// Claude whose config directory is claudeDir.
+func NewOrca(runner Runner, claudeDir string) *Orca {
+	return &Orca{runner: runner, claudeDir: claudeDir}
+}
+
+// ClaudeDir is Claude's config directory: $CLAUDE_CONFIG_DIR, else
+// ~/.claude.
+func ClaudeDir() (string, error) {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude"), nil
+}
 
 // OrcaError is a failure Orca reported in its JSON envelope.
 type OrcaError struct {
@@ -221,10 +241,17 @@ var (
 	safeSessionID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
-// Wake is the first Wake of a new Workspace: it starts Claude in a new
-// terminal of the Workspace with the daemon-owned session ID, so later Wakes
-// can resume that conversation (ADR-0002), and the prompt as its first
-// message. The terminal's handle is not kept; it is re-resolved when needed.
+// Wake hands the Workspace to Claude with prompt, keeping one conversation
+// per Workspace under the daemon-owned session ID (ADR-0002):
+//
+//   - a live Claude whose agent is idle gets the prompt sent into it;
+//   - otherwise, if Claude has a transcript of the session, the
+//     conversation is resumed with `claude --resume` in a new terminal;
+//   - otherwise, as on the first Wake or when the session cannot be resumed,
+//     a fresh session is started under the same ID with `claude --session-id`.
+//
+// Terminal handles are never kept; they are re-resolved on every Wake. The
+// caller holds the Wake while the agent is working.
 func (o *Orca) Wake(ctx context.Context, ws Workspace, prompt string) error {
 	if !safePrompt.MatchString(prompt) {
 		return fmt.Errorf("refusing to Wake with prompt %q: it contains characters a shell could interpret", prompt)
@@ -232,11 +259,62 @@ func (o *Orca) Wake(ctx context.Context, ws Workspace, prompt string) error {
 	if !safeSessionID.MatchString(ws.ClaudeSessionID) {
 		return fmt.Errorf("refusing to Wake: session ID %q is not a UUID", ws.ClaudeSessionID)
 	}
-	command := fmt.Sprintf(`claude --session-id %s "%s"`, ws.ClaudeSessionID, prompt)
+	if !o.hasTranscript(ws.ClaudeSessionID) {
+		return o.startClaude(ctx, ws, fmt.Sprintf(`claude --session-id %s "%s"`, ws.ClaudeSessionID, prompt))
+	}
+	handle, err := o.liveClaude(ctx, ws)
+	if err != nil {
+		return err
+	}
+	if handle != "" {
+		state, err := o.AgentState(ctx, ws)
+		if err != nil {
+			return err
+		}
+		if state == AgentIdle {
+			return o.call(ctx, nil, "terminal", "send", "--terminal", handle, "--text", prompt, "--enter")
+		}
+	}
+	return o.startClaude(ctx, ws, fmt.Sprintf(`claude --resume %s "%s"`, ws.ClaudeSessionID, prompt))
+}
+
+// startClaude runs command in a new terminal of ws.
+func (o *Orca) startClaude(ctx context.Context, ws Workspace, command string) error {
 	return o.call(ctx, nil, "terminal", "create",
 		"--worktree", "identity:"+ws.OrcaIdentityKey,
 		"--command", command,
 	)
+}
+
+// liveClaude returns the handle of a live, writable terminal in ws running
+// Claude, or "" if there is none.
+func (o *Orca) liveClaude(ctx context.Context, ws Workspace) (string, error) {
+	var list struct {
+		Terminals []struct {
+			Handle        string `json:"handle"`
+			AgentIdentity string `json:"agentIdentity"`
+			Connected     bool   `json:"connected"`
+			Writable      bool   `json:"writable"`
+			Orphaned      bool   `json:"orphaned"`
+		} `json:"terminals"`
+	}
+	if err := o.call(ctx, &list, "terminal", "list", "--worktree", "identity:"+ws.OrcaIdentityKey); err != nil {
+		return "", err
+	}
+	for _, t := range list.Terminals {
+		if t.AgentIdentity == "claude" && t.Connected && t.Writable && !t.Orphaned && t.Handle != "" {
+			return t.Handle, nil
+		}
+	}
+	return "", nil
+}
+
+// hasTranscript reports whether Claude keeps a transcript of session, which
+// `claude --resume` needs. Claude stores it as projects/<project>/<id>.jsonl
+// in its config directory; session IDs are UUIDs, so any project will do.
+func (o *Orca) hasTranscript(session string) bool {
+	matches, _ := filepath.Glob(filepath.Join(o.claudeDir, "projects", "*", session+".jsonl"))
+	return len(matches) > 0
 }
 
 // Exists reports whether Orca still has ws's worktree. It is an error, not

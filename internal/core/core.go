@@ -39,7 +39,11 @@ func Start(ctx context.Context, cfg config.Config, log *logging.Logger, searchDi
 		return nil, err
 	}
 	log.Info("operator verified", "account", cfg.GitHub.Account)
-	return &Daemon{cfg: cfg, github: gh, workspaces: workspace.NewOrca(runner), log: log}, nil
+	claudeDir, err := workspace.ClaudeDir()
+	if err != nil {
+		return nil, fmt.Errorf("find Claude's config directory: %w", err)
+	}
+	return &Daemon{cfg: cfg, github: gh, workspaces: workspace.NewOrca(runner, claudeDir), log: log}, nil
 }
 
 // OrcaAvailable reports whether an Orca runtime is reachable. It is a
@@ -119,6 +123,9 @@ func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflo
 	next, prActions := workflow.Reconcile(next, prEvents)
 	actions = append(actions, prActions...)
 
+	next, ciActions := workflow.Reconcile(next, d.observeCI(ctx, next, now))
+	actions = append(actions, ciActions...)
+
 	// An issue that cannot be read, such as a deleted one, is treated as no
 	// longer Eligible: it is Paused, never lost, and never fails the Tick.
 	missing := workflow.Ineligible(next, assigned, now)
@@ -161,6 +168,29 @@ func (d *Daemon) observePRs(ctx context.Context, st workflow.State, now time.Tim
 		}
 	}
 	return events, nil
+}
+
+// observeCI reads the head commit and CI state of the linked PR of every
+// Owned Issue whose CI can still change it. A PR that cannot be read is
+// skipped with a warning and observed again next Tick; it never fails the
+// Tick.
+func (d *Daemon) observeCI(ctx context.Context, st workflow.State, now time.Time) []workflow.Event {
+	var events []workflow.Event
+	for _, w := range st.Items {
+		if !w.WatchesCI() {
+			continue
+		}
+		ci, err := d.github.PullRequestCI(ctx, w.Repo, w.PR)
+		if err != nil {
+			d.log.Warn("cannot read CI of the linked PR; retrying next Tick", "item", w.ID, "pr", w.PR, "err", err)
+			continue
+		}
+		events = append(events, workflow.Event{
+			Type: workflow.CIObserved, Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL,
+			PR: w.PR, PRURL: w.PRURL, HeadSHA: ci.HeadSHA, Settled: ci.Settled, Failed: ci.Failed, ObservedAt: now,
+		})
+	}
+	return events
 }
 
 // prEvent decides what w's PRs, newest first, say about it: the linked PR
@@ -234,13 +264,13 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 	created := map[string]bool{}
 	for _, a := range actions {
 		item, ok := st.Item(a.Item.ID)
-		if !ok || item.State != workflow.PendingWorkspace {
+		if !ok {
 			continue
 		}
 		var next workflow.State
 		switch a.Type {
 		case workflow.CreateWorkspace:
-			if item.Workspace != nil {
+			if item.State != workflow.PendingWorkspace || item.Workspace != nil {
 				continue
 			}
 			ws, err := d.workspaces.CreateForIssue(ctx, workspace.CreateInput{Repo: item.Repo, Issue: item.Issue})
@@ -252,7 +282,7 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 			d.log.Info("Workspace created", "item", item.ID, "path", ws.Path, "orcaIdentityKey", ws.OrcaIdentityKey)
 			next = workflow.WorkspaceCreated(st, item.ID, ws, time.Now().UTC())
 		case workflow.Wake:
-			if item.Workspace == nil {
+			if reason, due := workflow.WakeDue(item); !due || reason != a.Reason || item.Workspace == nil {
 				continue
 			}
 			next = d.wake(ctx, st, item, a.Reason, created[item.ID])
@@ -268,7 +298,9 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 
 // wake Wakes Claude in item's Workspace and returns the recorded outcome. A
 // Workspace recorded on an earlier Tick is checked first, so a Workspace
-// removed in Orca is reported rather than silently recreated.
+// removed in Orca is reported rather than silently recreated, and the Wake
+// is Held while its agent is working, so a Workspace is never Woken twice
+// concurrently.
 func (d *Daemon) wake(ctx context.Context, st workflow.State, item workflow.WorkItem, reason workflow.WakeReason, justCreated bool) workflow.State {
 	ws := *item.Workspace
 	if !justCreated {
@@ -279,13 +311,22 @@ func (d *Daemon) wake(ctx context.Context, st workflow.State, item workflow.Work
 		if !exists {
 			return d.failed(st, item.ID, "check Workspace", fmt.Errorf("Workspace %s no longer exists in Orca", ws.Path))
 		}
+		agent, err := d.workspaces.AgentState(ctx, ws)
+		if err != nil {
+			d.log.Warn("cannot read the agent's state; holding the Wake until a later Tick", "item", item.ID, "err", err)
+			return workflow.Held(st, item.ID, reason, workflow.HoldBackendUnavailable, time.Now().UTC())
+		}
+		if agent == workspace.AgentWorking {
+			d.log.Info("agent is working; holding the Wake until a later Tick", "item", item.ID, "reason", reason)
+			return workflow.Held(st, item.ID, reason, workflow.HoldAgentWorking, time.Now().UTC())
+		}
 	}
-	prompt := workflow.WakePrompt(d.cfg.Claude.EntrySkill, reason, item.ID)
+	prompt := workflow.WakePrompt(d.cfg.Claude.EntrySkill, reason, item.WakeRef(reason))
 	if err := d.workspaces.Wake(ctx, ws, prompt); err != nil {
 		return d.failed(st, item.ID, "Wake", err)
 	}
 	d.log.Info("Woken", "item", item.ID, "reason", reason, "claudeSessionId", ws.ClaudeSessionID)
-	return workflow.Woken(st, item.ID, time.Now().UTC())
+	return workflow.Woken(st, item.ID, reason, time.Now().UTC())
 }
 
 // failed records a failure of the daemon's own action.

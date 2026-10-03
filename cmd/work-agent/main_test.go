@@ -29,6 +29,8 @@ type cli struct {
 
 func newCLI(t *testing.T, fx testharness.Fixture) *cli {
 	t.Helper()
+	// Claude's config directory, where its session transcripts live.
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	stubs := testharness.New(t)
 	stubs.SetFixture(t, fx)
 	cfg := map[string]any{

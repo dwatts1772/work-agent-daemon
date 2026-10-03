@@ -41,6 +41,16 @@ type Orca struct {
 	// AgentStates maps a worktree name to the states of its agents, as
 	// `worktree ps` reports them.
 	AgentStates map[string][]string `json:"agentStates,omitempty"`
+	// Terminals maps a worktree name to its live terminals, as `terminal
+	// list` reports them.
+	Terminals map[string][]OrcaTerminal `json:"terminals,omitempty"`
+}
+
+// OrcaTerminal is a live terminal in a worktree.
+type OrcaTerminal struct {
+	Handle string `json:"handle"`
+	// AgentIdentity is "claude" while Claude runs in the terminal.
+	AgentIdentity string `json:"agentIdentity,omitempty"`
 }
 
 // OrcaWorktreesFile holds the worktrees the stub orca has created.
@@ -77,6 +87,19 @@ type PullRequest struct {
 	// ClosingIssues are the "owner/name#number" issues GitHub links to the
 	// PR as ones it closes.
 	ClosingIssues []string `json:"closingIssues,omitempty"`
+	// HeadSHA is the PR's head commit and Checks the checks on it.
+	HeadSHA string  `json:"headSha,omitempty"`
+	Checks  []Check `json:"checks,omitempty"`
+}
+
+// Check is a check run on a PR's head commit, as statusCheckRollup reports
+// it.
+type Check struct {
+	Name string `json:"name"`
+	// Status is "QUEUED", "IN_PROGRESS" or "COMPLETED".
+	Status string `json:"status"`
+	// Conclusion is set once COMPLETED: "SUCCESS", "FAILURE", "SKIPPED", ….
+	Conclusion string `json:"conclusion,omitempty"`
 }
 
 // Call is one recorded stub invocation.

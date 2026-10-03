@@ -32,6 +32,10 @@ func orca(dir string, rt *testharness.Orca, args []string) {
 		orcaWorktreePs(dir, rt)
 	case len(args) >= 2 && args[0] == "terminal" && args[1] == "create":
 		orcaTerminalCreate(dir, args[2:])
+	case len(args) >= 2 && args[0] == "terminal" && args[1] == "list":
+		orcaTerminalList(dir, rt, args[2:])
+	case len(args) >= 2 && args[0] == "terminal" && args[1] == "send":
+		orcaTerminalSend(rt, args[2:])
 	default:
 		fail(2, "stub orca: unsupported command %q", args)
 	}
@@ -119,6 +123,38 @@ func orcaWorktreePs(dir string, rt *testharness.Orca) {
 func orcaTerminalCreate(dir string, args []string) {
 	wt := findWorktree(dir, args)
 	orcaOK(map[string]any{"terminal": map[string]any{"handle": "term_stub", "worktreeId": wt.RepoID + "::" + wt.Path}})
+}
+
+func orcaTerminalList(dir string, rt *testharness.Orca, args []string) {
+	wt := findWorktree(dir, args)
+	out := []map[string]any{}
+	for _, term := range rt.Terminals[wt.Name] {
+		t := map[string]any{"handle": term.Handle, "worktreePath": wt.Path, "connected": true, "writable": true, "orphaned": false}
+		if term.AgentIdentity != "" {
+			t["agentIdentity"] = term.AgentIdentity
+		}
+		out = append(out, t)
+	}
+	orcaOK(map[string]any{"terminals": out, "totalCount": len(out), "truncated": false})
+}
+
+// orcaTerminalSend accepts input for any live terminal handle.
+func orcaTerminalSend(rt *testharness.Orca, args []string) {
+	var handle string
+	for i, a := range args {
+		if a == "--terminal" && i+1 < len(args) {
+			handle = args[i+1]
+		}
+	}
+	for _, terms := range rt.Terminals {
+		for _, term := range terms {
+			if term.Handle == handle {
+				orcaOK(map[string]any{"handle": handle, "accepted": true})
+				return
+			}
+		}
+	}
+	orcaFail("terminal_not_found", "terminal "+handle+" not found")
 }
 
 // findWorktree resolves the --worktree identity:<key> selector in args.

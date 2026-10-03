@@ -10,6 +10,7 @@ func TestCheckAllowsReadOnlyGitHubCalls(t *testing.T) {
 		{"issue", "list", "--repo", "o/r", "--assignee", "dwatts1772"},
 		{"issue", "view", "4", "--repo", "o/r", "--json", "state"},
 		{"pr", "list", "--repo", "o/r", "--author", "dwatts1772", "--state", "all"},
+		{"pr", "view", "4", "--repo", "o/r", "--json", "headRefOid,statusCheckRollup"},
 		{"api", "-XGET", "repos/o/r"},
 		{"api", "-iXGET", "repos/o/r"},
 		{"api", "-H", "Accept: -XPUT", "repos/o/r"},
