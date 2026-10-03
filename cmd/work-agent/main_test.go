@@ -802,7 +802,7 @@ func TestListAndInspectShowPausedItemsAndWhy(t *testing.T) {
 	}
 }
 
-func TestListShowsEachItemsHeldWakeAndWhy(t *testing.T) {
+func TestListShowsHeldWakeAndWhy(t *testing.T) {
 	fx := world()
 	fx.Orca = nil
 	c := newCLI(t, fx)

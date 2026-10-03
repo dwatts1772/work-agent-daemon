@@ -21,8 +21,8 @@ import (
 var itemRef = regexp.MustCompile(`^[^/\s#]+/[^/\s#]+#[1-9][0-9]*$`)
 
 // runList prints every Work Item, one per line, ending with its Held Wake
-// when it has one. It reads state without
-// taking the lock, so it works beside a running Tick.
+// when it has one. It reads state without taking the lock, so it works
+// beside a running Tick.
 func runList(args []string, stdout, stderr io.Writer) int {
 	fs, configPath, err := flags("list", stderr)
 	if err != nil {
