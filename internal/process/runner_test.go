@@ -3,7 +3,9 @@ package process_test
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,7 +23,7 @@ func newRunner(t *testing.T) (*process.Runner, *testharness.Stubs) {
 func TestRunExecutesTheConfiguredBinary(t *testing.T) {
 	r, stubs := newRunner(t)
 
-	out, err := r.Run(context.Background(), "orca", []string{"worktree", "ps", "--json"})
+	out, err := r.Run(context.Background(), "orca", []string{"status", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +32,7 @@ func TestRunExecutesTheConfiguredBinary(t *testing.T) {
 		t.Errorf("stdout = %q", out)
 	}
 	calls := stubs.Calls(t)
-	if len(calls) != 1 || calls[0].Bin != "orca" || strings.Join(calls[0].Args, " ") != "worktree ps --json" {
+	if len(calls) != 1 || calls[0].Bin != "orca" || strings.Join(calls[0].Args, " ") != "status --json" {
 		t.Errorf("calls = %+v", calls)
 	}
 }
@@ -185,5 +187,40 @@ func TestResolveBinariesRejectsMissingOverride(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), missing) {
 		t.Errorf("err = %v, want mention of %s", err, missing)
+	}
+}
+
+// orca.cmd refuses to forward message bodies, so on Windows the daemon must
+// always run orca.exe — even when an orca.cmd shim comes first on PATH.
+func TestResolveBinariesNeverPicksOrcaCmdOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("orca.cmd exists only on Windows")
+	}
+	shimDir, exeDir := t.TempDir(), testharness.New(t)
+	if err := os.WriteFile(filepath.Join(shimDir, "orca.cmd"), []byte("@echo shim\r\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+exeDir.Dir)
+
+	got, err := process.ResolveBinaries(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(got["orca"], exeDir.Paths["orca"]) {
+		t.Errorf("orca = %q, want %q", got["orca"], exeDir.Paths["orca"])
+	}
+
+	t.Setenv("PATH", shimDir)
+	got, err = process.ResolveBinaries(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path, ok := got["orca"]; ok {
+		t.Errorf("orca resolved to %q with only orca.cmd available", path)
+	}
+
+	_, err = process.ResolveBinaries(map[string]string{"orca": filepath.Join(shimDir, "orca.cmd")}, nil)
+	if err == nil {
+		t.Error("accepted an orca.cmd override")
 	}
 }

@@ -23,6 +23,7 @@ func TestTheStatusFollowsOrcaGoingAwayAndComingBack(t *testing.T) {
 	fx := testharness.Fixture{
 		Tokens: map[string]string{operator: token},
 		Users:  map[string]string{token: operator},
+		Orca:   &testharness.Orca{},
 	}
 	stubs.SetFixture(t, fx)
 	cfg := config.Config{
@@ -55,12 +56,13 @@ func TestTheStatusFollowsOrcaGoingAwayAndComingBack(t *testing.T) {
 
 	expect(core.StatusOK)
 
-	fx.Orca = testharness.OrcaUnreachable
+	running := fx.Orca
+	fx.Orca = nil // Orca quits
 	stubs.SetFixture(t, fx)
 	loop.TickNow()
 	expect(core.StatusOrcaUnavailable)
 
-	fx.Orca = testharness.OrcaReachable
+	fx.Orca = running
 	stubs.SetFixture(t, fx)
 	loop.TickNow()
 	expect(core.StatusOK)

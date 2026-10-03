@@ -11,7 +11,7 @@ const (
 	CallsFile   = "calls.jsonl"
 )
 
-// Fixture is the world the stubs simulate.
+// Fixture is the GitHub world the stub gh simulates.
 type Fixture struct {
 	// Tokens maps an account to the token `gh auth token --user <account>`
 	// prints. Accounts missing here are not logged in.
@@ -26,19 +26,33 @@ type Fixture struct {
 	// EchoTokenOnError makes failing gh calls print GH_TOKEN to stderr, as
 	// a hostile stand-in for any tool that leaks its credentials in errors.
 	EchoTokenOnError bool `json:"echoTokenOnError"`
-	// Orca is how the stub orca answers `orca status --json`; the zero
-	// value is a reachable runtime.
-	Orca OrcaMode `json:"orca"`
+	// Orca is the Orca runtime the stub orca simulates; nil means Orca is
+	// not running.
+	Orca *Orca `json:"orca,omitempty"`
 }
 
-// OrcaMode is a state of the stub Orca.
-type OrcaMode string
+// Orca is a running Orca runtime. Worktrees the stub creates persist in
+// OrcaWorktreesFile across fixture changes, as they do across Orca restarts.
+type Orca struct {
+	// Repos maps each registered repo's Orca id to its GitHub "owner/name".
+	Repos map[string]string `json:"repos"`
+	// AgentStates maps a worktree name to the states of its agents, as
+	// `worktree ps` reports them.
+	AgentStates map[string][]string `json:"agentStates,omitempty"`
+}
 
-const (
-	OrcaReachable   OrcaMode = ""
-	OrcaUnreachable OrcaMode = "unreachable" // the app is not running
-	OrcaFailing     OrcaMode = "failing"     // the CLI itself errors
-)
+// OrcaWorktreesFile holds the worktrees the stub orca has created.
+const OrcaWorktreesFile = "orca-worktrees.json"
+
+// OrcaWorktree is one worktree the stub orca created.
+type OrcaWorktree struct {
+	IdentityKey string `json:"identityKey"`
+	RepoID      string `json:"repoId"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Branch      string `json:"branch"`
+	Issue       int    `json:"issue"`
+}
 
 type Issue struct {
 	Number    int      `json:"number"`

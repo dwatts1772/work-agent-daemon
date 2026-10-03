@@ -24,40 +24,23 @@ func main() {
 	args := os.Args[1:]
 	record(dir, bin, args)
 
-	if bin != "gh" && bin != "orca" {
+	data, err := os.ReadFile(filepath.Join(dir, testharness.FixtureFile))
+	if bin != "gh" && (bin != "orca" || os.IsNotExist(err)) {
 		fmt.Printf("stub %s\n", bin)
 		return
 	}
 	var fx testharness.Fixture
-	data, err := os.ReadFile(filepath.Join(dir, testharness.FixtureFile))
 	if err == nil {
 		err = json.Unmarshal(data, &fx)
 	}
-	// Without a fixture the stub orca is a reachable runtime.
-	if err != nil && !(bin == "orca" && os.IsNotExist(err)) {
+	if err != nil {
 		fail(1, "stub %s: fixture: %v", bin, err)
 	}
 	if bin == "orca" {
-		orca(fx, args)
+		orca(dir, fx.Orca, args)
 		return
 	}
 	gh(fx, args)
-}
-
-// orca answers `orca status --json` in the shape of Orca 1.4.219.
-func orca(fx testharness.Fixture, args []string) {
-	if !slices.Equal(args, []string{"status", "--json"}) {
-		fmt.Println("stub orca")
-		return
-	}
-	switch fx.Orca {
-	case testharness.OrcaFailing:
-		fail(1, "orca: internal error")
-	case testharness.OrcaUnreachable:
-		fmt.Println(`{"id":"local-status","ok":true,"result":{"app":{"running":false},"runtime":{"state":"stopped","reachable":false}}}`)
-	default:
-		fmt.Println(`{"id":"local-status","ok":true,"result":{"app":{"running":true},"runtime":{"state":"ready","reachable":true,"capabilities":[]}}}`)
-	}
 }
 
 func record(dir, bin string, args []string) {

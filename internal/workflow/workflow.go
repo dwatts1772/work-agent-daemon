@@ -26,8 +26,14 @@ const KindOwnedIssue Kind = "OWNED_ISSUE"
 type ItemState string
 
 const (
-	// PendingWorkspace is an Owned Issue whose Workspace does not exist yet.
+	// PendingWorkspace is an Owned Issue not yet Woken in its Workspace;
+	// the Workspace may or may not exist yet.
 	PendingWorkspace ItemState = "PENDING_WORKSPACE"
+	// InProgress is an Owned Issue Woken in its Workspace, with no PR yet.
+	InProgress ItemState = "IN_PROGRESS"
+	// Failed is a Work Item whose daemon-owned action failed
+	// MaxActionFailures times in a row.
+	Failed ItemState = "FAILED"
 	// Paused is a Work Item the daemon will not Wake. Nothing about it,
 	// including its Workspace, is changed or deleted while Paused.
 	Paused ItemState = "PAUSED"
@@ -43,6 +49,30 @@ type Pause struct {
 	// ResumeTo is the state the item had when it was Paused.
 	ResumeTo ItemState `json:"resumeTo"`
 	Since    time.Time `json:"since"`
+}
+
+// MaxActionFailures is how many consecutive failures of the daemon's own
+// action (such as creating a Workspace) move a Work Item to Failed.
+const MaxActionFailures = 3
+
+// WakeReason is why a Wake happened.
+type WakeReason string
+
+// WakeIssue Wakes Claude to start work on an Owned Issue.
+const WakeIssue WakeReason = "issue"
+
+// HoldReason is why a Wake is Held.
+type HoldReason string
+
+// HoldBackendUnavailable holds a Wake while Orca is unreachable.
+const HoldBackendUnavailable HoldReason = "backend-unavailable"
+
+// HeldWake is a Wake the daemon decided on but deferred; it is retried on a
+// later Tick, never dropped.
+type HeldWake struct {
+	Reason WakeReason `json:"reason"`
+	Since  time.Time  `json:"since"`
+	Why    HoldReason `json:"why"`
 }
 
 // WorkItem is one tracked unit of work. Only Owned Issues exist so far.
@@ -61,9 +91,15 @@ type WorkItem struct {
 	Pause *Pause `json:"pause,omitempty"`
 	// ProcessedEventIDs are the dedupe markers of every event already
 	// applied to this Work Item.
-	ProcessedEventIDs []string  `json:"processedEventIds"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	ProcessedEventIDs []string `json:"processedEventIds"`
+	// HeldWake is the Wake waiting for a later Tick, if any.
+	HeldWake   *HeldWake  `json:"heldWake,omitempty"`
+	LastWakeAt *time.Time `json:"lastWakeAt,omitempty"`
+	// LastError is the most recent failure of the daemon's own action.
+	LastError                 string    `json:"lastError,omitempty"`
+	ConsecutiveActionFailures int       `json:"consecutiveActionFailures"`
+	CreatedAt                 time.Time `json:"createdAt"`
+	UpdatedAt                 time.Time `json:"updatedAt"`
 }
 
 // State is every Work Item the daemon tracks; it is what state.json holds.
@@ -144,6 +180,10 @@ type ActionType string
 const (
 	// CreateOwnedIssue starts tracking Item.
 	CreateOwnedIssue ActionType = "CREATE_OWNED_ISSUE"
+	// CreateWorkspace creates Item's Workspace.
+	CreateWorkspace ActionType = "CREATE_WORKSPACE"
+	// Wake Wakes Claude in Item's Workspace for Reason.
+	Wake ActionType = "WAKE"
 	// PauseItem records Item, now Paused or with a new reason to stay so.
 	PauseItem ActionType = "PAUSE"
 	// ResumeItem records Item, no longer Paused.
@@ -153,8 +193,9 @@ const (
 // Action is something the reducer decided should happen to Item; for every
 // action but CreateOwnedIssue, Item is the item's new record.
 type Action struct {
-	Type ActionType
-	Item WorkItem
+	Type   ActionType
+	Item   WorkItem
+	Reason WakeReason
 }
 
 // Reduce decides the actions for one event. It never modifies state.
@@ -306,4 +347,91 @@ func Reconcile(state State, events []Event) (State, []Action) {
 		all = append(all, actions...)
 	}
 	return state, all
+}
+
+// Item returns the Work Item with id.
+func (s State) Item(id string) (WorkItem, bool) {
+	w, i := s.find(id)
+	return w, i >= 0
+}
+
+// PendingActions decides the Workspace actions every Owned Issue in
+// PendingWorkspace still needs: create its Workspace if none is recorded,
+// then Wake Claude in it. They repeat on every Tick until their outcome is
+// recorded, which is how a Held Wake is retried.
+func PendingActions(state State) []Action {
+	var actions []Action
+	for _, w := range state.Items {
+		if w.Kind != KindOwnedIssue || w.State != PendingWorkspace {
+			continue
+		}
+		if w.Workspace == nil {
+			actions = append(actions, Action{Type: CreateWorkspace, Item: w})
+		}
+		actions = append(actions, Action{Type: Wake, Item: w, Reason: WakeIssue})
+	}
+	return actions
+}
+
+// WakePrompt is the one prompt every Wake sends: the Entry Skill, the Wake
+// Reason, and the issue or PR reference.
+func WakePrompt(entrySkill string, reason WakeReason, ref string) string {
+	return entrySkill + " " + string(reason) + " " + ref
+}
+
+// WorkspaceCreated records the Work Item's newly created Workspace.
+func WorkspaceCreated(state State, id string, ws workspace.Workspace, now time.Time) State {
+	return update(state, id, now, func(w *WorkItem) {
+		w.Workspace = &ws
+		succeeded(w)
+	})
+}
+
+// Woken records the Work Item's first Wake, moving it to InProgress.
+func Woken(state State, id string, now time.Time) State {
+	return update(state, id, now, func(w *WorkItem) {
+		w.State = InProgress
+		w.LastWakeAt = &now
+		succeeded(w)
+	})
+}
+
+// Held records that the Work Item's Wake is Held. Holding an already Held
+// Wake for the same reason changes nothing, so the hold keeps its start.
+func Held(state State, id string, reason WakeReason, why HoldReason, now time.Time) State {
+	if w, ok := state.Item(id); ok && w.HeldWake != nil && w.HeldWake.Reason == reason && w.HeldWake.Why == why {
+		return state
+	}
+	return update(state, id, now, func(w *WorkItem) {
+		w.HeldWake = &HeldWake{Reason: reason, Since: now, Why: why}
+	})
+}
+
+// ActionFailed records a failure of the daemon's own action on the Work
+// Item; the MaxActionFailures-th consecutive failure moves it to Failed.
+func ActionFailed(state State, id string, err string, now time.Time) State {
+	return update(state, id, now, func(w *WorkItem) {
+		w.HeldWake = nil
+		w.LastError = err
+		w.ConsecutiveActionFailures++
+		if w.ConsecutiveActionFailures >= MaxActionFailures {
+			w.State = Failed
+		}
+	})
+}
+
+func succeeded(w *WorkItem) {
+	w.HeldWake = nil
+	w.LastError = ""
+	w.ConsecutiveActionFailures = 0
+}
+
+// update returns state with change applied to a copy of Work Item id.
+func update(state State, id string, now time.Time, change func(*WorkItem)) State {
+	next := state.clone()
+	if _, i := next.find(id); i >= 0 {
+		change(&next.Items[i])
+		next.Items[i].UpdatedAt = now
+	}
+	return next
 }
