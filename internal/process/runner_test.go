@@ -51,6 +51,7 @@ func TestRunRefusesDisallowedCommandsWithoutStartingAProcess(t *testing.T) {
 		{"git", []string{"push", "--force-w"}},
 		{"gh", []string{"api", "-iXPUT", "repos/o/r/pulls/4/merge"}},
 		{"gh", []string{"repo", "delete", "o/r"}},
+		{"orca", []string{"worktree", "remove", "--worktree", "identity:k"}},
 	} {
 		if _, err := r.Run(context.Background(), c.bin, c.args); err == nil {
 			t.Errorf("Run(%s %v) succeeded, want refusal", c.bin, c.args)
@@ -66,7 +67,7 @@ func TestRunNeverPassesInheritedGitHubTokensToChildren(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "inherited-github")
 	r, stubs := newRunner(t)
 
-	if _, err := r.Run(context.Background(), "orca", nil); err != nil {
+	if _, err := r.Run(context.Background(), "orca", []string{"status", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Run(context.Background(), "claude", nil, "GH_TOKEN=explicit"); err != nil {

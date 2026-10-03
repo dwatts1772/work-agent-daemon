@@ -87,9 +87,11 @@ func prepare(ctx context.Context, configPath string, searchDirs []string) (t *tr
 		return nil, err
 	}
 	t = &tray{configPath: configPath, stateDir: stateDir, closers: []io.Closer{instance}}
+	// Close through a copy: returning nil, err sets t to nil before this runs.
+	started := t
 	defer func() {
 		if err != nil {
-			t.close()
+			started.close()
 		}
 	}()
 

@@ -184,6 +184,36 @@ func TestAReviewWorkspaceCannotPushToTheAuthorsBranch(t *testing.T) {
 	}
 }
 
+// An explicit refspec is not blocked by git: the Review Workspace shares its
+// remotes with the Operator's clone, where Owned Issue Workspaces must push,
+// and a pushurl would not stop a push to a URL anyway. The Entry Skill's
+// "never pushes" guardrail covers it (skills: TestSkillStatesPushPolicy).
+// If this test fails, git now blocks it: update ADR-0003 and the skill.
+func TestAnExplicitPushFromAReviewWorkspaceIsLeftToTheEntrySkill(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	g := realGit{t: t, clone: filepath.Join(dir, "clone")}
+	origin := filepath.Join(dir, "origin.git")
+	g.mustGit(dir, "init", "--bare", "-b", "main", origin)
+	g.mustGit(dir, "clone", origin, g.clone)
+	g.mustGit(g.clone, "commit", "--allow-empty", "-m", "base")
+	g.mustGit(g.clone, "push", "origin", "HEAD:main", "HEAD:refs/heads/feature", "HEAD:refs/pull/333/head")
+	authorHead := g.mustGit(origin, "rev-parse", "refs/heads/feature")
+
+	ws, err := workspace.NewOrca(g, t.TempDir()).CreateForReview(ctx, workspace.ReviewInput{Repo: "org/a", PR: 333, HeadSHA: authorHead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.mustGit(ws.Path, "commit", "--allow-empty", "-m", "a review fix")
+	g.git(ws.Path, "push", "origin", "HEAD:feature")
+
+	if got := g.mustGit(origin, "rev-parse", "refs/heads/feature"); got == authorHead {
+		t.Errorf("git refused the explicit push; it is now blocked structurally")
+	}
+}
+
 func TestFetchReviewHeadRefreshesThePullRefWithoutCreatingAWorktree(t *testing.T) {
 	orca, stubs := newOrca(t, running())
 	stubs.SetFixture(t, testharness.Fixture{Orca: running(), PullRefs: map[string]string{"org/b#333": "sss"}})

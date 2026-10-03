@@ -7,8 +7,9 @@ import (
 
 // Check reports whether the runner may execute bin with args. The daemon is
 // GitHub-read-only: gh is limited to the read commands the daemon uses, git
-// to commands that cannot change any remote (there is no push at all), and
-// no other binary than gh, git, orca and claude can be run. This is what
+// to commands that cannot change any remote (there is no push at all), orca
+// to the commands that create, inspect and Wake Workspaces, and no other
+// binary than gh, git, orca and claude can be run. This is what
 // makes "no code path can merge or force push" true by construction.
 //
 // Grow the allowlists only when a feature needs a command, and test the
@@ -19,11 +20,41 @@ func Check(bin string, args []string) error {
 		return checkGH(args)
 	case "git":
 		return checkGit(args)
-	case "orca", "claude":
+	case "orca":
+		return checkOrca(args)
+	case "claude":
 		return nil
 	default:
 		return fmt.Errorf("binary %q is not allowlisted", bin)
 	}
+}
+
+// orcaAllowed lists the permitted orca commands as "command" or "command
+// subcommand". None removes a worktree or repo; terminal create's --command
+// is guarded by Wake, which refuses prompts a shell could interpret.
+var orcaAllowed = map[string]bool{
+	"status":          true,
+	"repo list":       true,
+	"worktree create": true,
+	"worktree ps":     true,
+	"worktree show":   true,
+	"terminal create": true,
+	"terminal list":   true,
+	"terminal send":   true,
+}
+
+func checkOrca(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("orca: no command given")
+	}
+	cmd := args[0]
+	if !orcaAllowed[cmd] && len(args) > 1 {
+		cmd += " " + args[1]
+	}
+	if !orcaAllowed[cmd] {
+		return fmt.Errorf("orca %s is not allowlisted", cmd)
+	}
+	return nil
 }
 
 // ghAllowed lists the permitted gh commands as "command subcommand"; "api"
