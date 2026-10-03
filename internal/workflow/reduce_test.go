@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/dwatts1772/work-agent-daemon/internal/workspace"
 )
 
 var t0 = time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
@@ -130,5 +132,67 @@ func TestReconcileAppliesEachEventOnce(t *testing.T) {
 	}
 	if !reflect.DeepEqual(again, next) {
 		t.Errorf("re-running changed state")
+	}
+}
+
+func ineligible(repo string, issue int, at time.Time) Event {
+	return Event{Type: IssueIneligible, Repo: repo, Issue: issue, ObservedAt: at}
+}
+
+func TestLosingEligibilityPausesWithoutTouchingTheWorkspaceAndRegainingItResumes(t *testing.T) {
+	item := ownedIssue("org/a", 1, "org/a#1:assigned")
+	item.Workspace = &workspace.Workspace{OrcaIdentityKey: "k", Path: "/ws", Branch: "issue-1", ClaudeSessionID: "s"}
+	start := State{Items: []WorkItem{item}}
+	t1, t2 := t0.Add(time.Hour), t0.Add(2*time.Hour)
+
+	pausedState, actions := Reconcile(start, []Event{ineligible("org/a", 1, t1)})
+
+	if len(actions) != 1 || actions[0].Type != PauseItem {
+		t.Fatalf("actions = %+v, want one PAUSE", actions)
+	}
+	p := pausedState.Items[0]
+	if p.State != Paused || p.Pause == nil || !p.Pause.NotEligible {
+		t.Fatalf("item = %+v, want PAUSED because not Eligible", p)
+	}
+	if !reflect.DeepEqual(p.Workspace, item.Workspace) {
+		t.Errorf("pausing changed the Workspace: %+v", p.Workspace)
+	}
+
+	again, actions := Reconcile(pausedState, []Event{ineligible("org/a", 1, t2)})
+	if len(actions) != 0 || !reflect.DeepEqual(again, pausedState) {
+		t.Errorf("re-observing lost Eligibility changed something: %+v", actions)
+	}
+
+	resumed, actions := Reconcile(pausedState, []Event{assigned("org/a", 1)})
+
+	if len(actions) != 1 || actions[0].Type != ResumeItem {
+		t.Fatalf("actions = %+v, want one RESUME", actions)
+	}
+	r := resumed.Items[0]
+	if r.State != PendingWorkspace || r.Pause != nil {
+		t.Errorf("item = %+v, want back in PENDING_WORKSPACE", r)
+	}
+	if !reflect.DeepEqual(r.Workspace, item.Workspace) {
+		t.Errorf("resuming changed the Workspace: %+v", r.Workspace)
+	}
+	if !reflect.DeepEqual(r.ProcessedEventIDs, item.ProcessedEventIDs) {
+		t.Errorf("dedupe markers changed: %v", r.ProcessedEventIDs)
+	}
+}
+
+func TestIneligibleReportsOnlyTrackedOwnedIssuesMissingFromTheObservation(t *testing.T) {
+	st := State{Items: []WorkItem{ownedIssue("org/a", 1), ownedIssue("org/a", 2), ownedIssue("org/b", 1)}}
+
+	got := Ineligible(st, []Event{assigned("org/a", 1), assigned("org/c", 9)}, t0)
+
+	var refs []string
+	for _, e := range got {
+		if e.Type != IssueIneligible {
+			t.Errorf("event %+v is not ISSUE_INELIGIBLE", e)
+		}
+		refs = append(refs, e.Ref())
+	}
+	if want := []string{"org/a#2", "org/b#1"}; !reflect.DeepEqual(refs, want) {
+		t.Errorf("ineligible = %v, want %v", refs, want)
 	}
 }
