@@ -115,6 +115,8 @@ type Review struct {
 	Body              string    `json:"body"`
 	State             string    `json:"state"`
 	SubmittedAt       time.Time `json:"submittedAt"`
+	// Commit is the head the review was of.
+	Commit string `json:"commit,omitempty"`
 }
 
 // Comment is a standalone comment on a PR, as `gh pr view --json comments`

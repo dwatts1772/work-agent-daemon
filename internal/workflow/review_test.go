@@ -35,6 +35,7 @@ func TestAReviewRequestIsTrackedOnlyOnceCIOnItsHeadIsSettled(t *testing.T) {
 		PR:                333,
 		PRURL:             "https://github.com/org/a/pull/333",
 		HeadSHA:           "aaa",
+		HeadSeenAt:        t0,
 		ProcessedEventIDs: []string{"org/a#333:review-request:dwatts1772:aaa"},
 		CreatedAt:         t0,
 		UpdatedAt:         t0,

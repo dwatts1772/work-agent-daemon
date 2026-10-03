@@ -49,6 +49,9 @@ const (
 	// Reviewing is a Review Request Woken in its Review Workspace to review
 	// the PR's head.
 	Reviewing ItemState = "REVIEWING"
+	// Reviewed is a Review Request whose request the Operator's own
+	// submitted review cleared. An explicit re-request reviews it again.
+	Reviewed ItemState = "REVIEWED"
 	// Done is a Work Item whose PR was merged or closed, or whose issue was
 	// closed. It is final: the daemon never Wakes it or changes it again.
 	Done ItemState = "DONE"
@@ -134,6 +137,14 @@ type WorkItem struct {
 	PRURL string `json:"prUrl,omitempty"`
 	// HeadSHA is the PR's head commit as last observed.
 	HeadSHA string `json:"headSha,omitempty"`
+	// HeadSeenAt is when the daemon first saw a Review Request's current
+	// request at HeadSHA: the item was tracked, its head changed, or the
+	// Operator was re-requested. A re-review waits a Quiet Period from it.
+	HeadSeenAt time.Time `json:"headSeenAt,omitzero"`
+	// ReviewedHeadSHA is the head a Review Request was last reviewed at;
+	// cleared when the Operator is re-requested, which that review no
+	// longer answers. A re-review is due while it differs from HeadSHA.
+	ReviewedHeadSHA string `json:"reviewedHeadSha,omitempty"`
 	// Pause is set while the item is Paused.
 	Pause *Pause `json:"pause,omitempty"`
 	// ProcessedEventIDs are the dedupe markers of every event already
@@ -237,6 +248,11 @@ const (
 	// repo on which the Operator is explicitly requested as a reviewer, with
 	// the CI state of its head commit.
 	ReviewRequested EventType = "REVIEW_REQUESTED"
+	// ReviewRequestRemoved is the observation that a tracked Review
+	// Request's PR no longer requests the Operator's review: it was merged
+	// or closed, the Operator's own review cleared the request, or someone
+	// removed it.
+	ReviewRequestRemoved EventType = "REVIEW_REQUEST_REMOVED"
 )
 
 // Feedback is one review or standalone comment on a PR that counts as
@@ -282,14 +298,23 @@ type Event struct {
 	// the Work Item for them.
 	QuietPeriod time.Duration
 	// Reviewer is the requested reviewer of a ReviewRequested event.
-	Reviewer   string
-	ObservedAt time.Time
+	Reviewer string
+	// Ended is set on a ReviewRequestRemoved event when the PR was merged
+	// or closed; OperatorReviewedAt is when the Operator last submitted a
+	// review on it, zero if never, and OperatorReviewedSHA the head that
+	// review was of. StillRequested is set when the PR itself still
+	// requests the Operator's review, though the listing missed it.
+	Ended               bool
+	OperatorReviewedAt  time.Time
+	OperatorReviewedSHA string
+	StillRequested      bool
+	ObservedAt          time.Time
 }
 
 // Ref is the "owner/name#number" the event is about: the PR of a
-// ReviewRequested event, otherwise the issue.
+// ReviewRequested or ReviewRequestRemoved event, otherwise the issue.
 func (e Event) Ref() string {
-	if e.Type == ReviewRequested {
+	if e.Type == ReviewRequested || e.Type == ReviewRequestRemoved {
 		return e.Repo + "#" + strconv.Itoa(e.PR)
 	}
 	return e.Repo + "#" + strconv.Itoa(e.Issue)
@@ -338,6 +363,15 @@ const (
 	// CIPassed records Item, its head's CI Settled green, now waiting for
 	// review or ready to merge.
 	CIPassed ActionType = "CI_PASSED"
+	// ReviewReRequested records Item, its Operator re-requested after their
+	// own review.
+	ReviewReRequested ActionType = "REVIEW_RE_REQUESTED"
+	// ReviewDue records Item with a review Wake due for its new head or
+	// re-request.
+	ReviewDue ActionType = "REVIEW_DUE"
+	// ReviewSubmitted records Item, now Reviewed: the Operator's own
+	// review cleared its request.
+	ReviewSubmitted ActionType = "REVIEW_SUBMITTED"
 )
 
 // Action is something the reducer decided should happen to Item; for every
@@ -368,19 +402,24 @@ func Reduce(state State, event Event) []Action {
 		return reducePR(state, event)
 	case ReviewRequested:
 		return reduceReviewRequested(state, event)
+	case ReviewRequestRemoved:
+		return reduceReviewRequestRemoved(state, event)
 	}
 	return nil
 }
 
 // reduceReviewRequested starts tracking a Review Request once CI on its
 // head is Settled, pass or fail. The Work Item is keyed by the PR, so a PR
-// already tracked is never recorded twice; a new head on a tracked PR is
-// left alone here.
+// already tracked is never recorded twice; a tracked one may be due a
+// re-review.
 func reduceReviewRequested(state State, event Event) []Action {
-	if !event.Settled || event.HeadSHA == "" {
+	if event.HeadSHA == "" {
 		return nil
 	}
-	if _, i := state.find(event.Ref()); i >= 0 {
+	if w, i := state.find(event.Ref()); i >= 0 {
+		return reduceReReview(w, event)
+	}
+	if !event.Settled {
 		return nil
 	}
 	return []Action{{Type: CreateReviewRequest, Item: WorkItem{
@@ -392,10 +431,88 @@ func reduceReviewRequested(state State, event Event) []Action {
 		PR:                event.PR,
 		PRURL:             event.PRURL,
 		HeadSHA:           event.HeadSHA,
+		HeadSeenAt:        event.ObservedAt,
 		ProcessedEventIDs: []string{event.Marker()},
 		CreatedAt:         event.ObservedAt,
 		UpdatedAt:         event.ObservedAt,
 	}}}
+}
+
+// reduceReReview decides whether a reviewed Review Request, still
+// requested, is due a review of its head again: its head changed, or the
+// Operator was re-requested after their own review cleared the request. The
+// re-review is due once that request has gone a Quiet Period without a push
+// and CI on the head is Settled; a push before it is carried out starts the
+// Quiet Period over, so rapid pushes produce one re-review.
+func reduceReReview(w WorkItem, event Event) []Action {
+	if w.State != Reviewing && w.State != Reviewed {
+		return nil
+	}
+	if w.State == Reviewing && w.ReviewedHeadSHA == "" {
+		// Woken before the reviewed head was recorded.
+		w.ReviewedHeadSHA = w.HeadSHA
+	}
+	var last ActionType
+	if w.HeadSHA != event.HeadSHA {
+		w.HeadSHA, w.HeadSeenAt = event.HeadSHA, event.ObservedAt
+		w.DueWake, w.HeldWake = "", nil
+		last = HeadChanged
+	}
+	if w.State == Reviewed && w.ReviewedHeadSHA != "" {
+		// Re-requested: the Operator's review no longer answers it.
+		w.ReviewedHeadSHA, w.HeadSeenAt = "", event.ObservedAt
+		last = ReviewReRequested
+	}
+	if w.DueWake == "" && w.ReviewedHeadSHA != w.HeadSHA && event.Settled && !event.ObservedAt.Before(w.HeadSeenAt.Add(event.QuietPeriod)) {
+		w.DueWake = WakeReview
+		last = ReviewDue
+	}
+	if last == "" {
+		return nil
+	}
+	w.UpdatedAt = event.ObservedAt
+	return []Action{{Type: last, Item: w}}
+}
+
+// reduceReviewRequestRemoved ends a Review Request whose PR no longer
+// requests the Operator's review. A request the Operator's own review
+// cleared — one submitted after the current request was first seen — leaves
+// a Woken item Reviewed at the head that review was of, so a later
+// re-request reviews it again. A request an open PR itself still holds is
+// not removed. Any other
+// removal, or the PR being merged or closed, moves it to Done from any
+// state, dropping any due or Held Wake: it is never Woken again. Its
+// Workspace is kept.
+func reduceReviewRequestRemoved(state State, event Event) []Action {
+	w, i := state.find(event.Ref())
+	if i < 0 || w.Kind != KindReviewRequest || w.State == Done || event.StillRequested && !event.Ended {
+		return nil
+	}
+	resting := w.State
+	if w.Pause != nil {
+		resting = w.Pause.ResumeTo
+	}
+	w.DueWake, w.HeldWake = "", nil
+	w.UpdatedAt = event.ObservedAt
+	if !event.Ended && event.OperatorReviewedAt.After(w.HeadSeenAt) && (resting == Reviewing || resting == Reviewed) {
+		reviewed := event.OperatorReviewedSHA
+		if reviewed == "" {
+			reviewed = w.HeadSHA
+		}
+		if resting == Reviewed && w.ReviewedHeadSHA == reviewed {
+			return nil
+		}
+		w.ReviewedHeadSHA = reviewed
+		if w.Pause != nil {
+			w.Pause.ResumeTo = Reviewed
+		} else {
+			w.State = Reviewed
+		}
+		return []Action{{Type: ReviewSubmitted, Item: w}}
+	}
+	w.State = Done
+	w.Pause = nil
+	return []Action{{Type: MarkDone, Item: w}}
 }
 
 // reducePR records the linked PR's head SHA and decides what its CI and
@@ -601,6 +718,23 @@ func Ineligible(state State, assigned []Event, at time.Time) []Event {
 	return events
 }
 
+// Unrequested returns every tracked Review Request not yet Done missing from
+// requested, the ReviewRequested events of a complete observation of the
+// review requests.
+func Unrequested(state State, requested []Event) []WorkItem {
+	seen := map[string]bool{}
+	for _, e := range requested {
+		seen[e.Ref()] = true
+	}
+	var items []WorkItem
+	for _, w := range state.Items {
+		if w.Kind == KindReviewRequest && w.State != Done && !seen[w.ID] {
+			items = append(items, w.clone())
+		}
+	}
+	return items
+}
+
 // Apply returns state with the actions' effects on Work Items recorded. It
 // never modifies its input.
 func Apply(state State, actions []Action) State {
@@ -609,7 +743,7 @@ func Apply(state State, actions []Action) State {
 		switch a.Type {
 		case CreateOwnedIssue, CreateReviewRequest:
 			next.Items = append(next.Items, a.Item)
-		case PauseItem, ResumeItem, LinkPR, MarkDone, HeadChanged, CIFailed, FeedbackDue, CIPassed:
+		case PauseItem, ResumeItem, LinkPR, MarkDone, HeadChanged, CIFailed, FeedbackDue, CIPassed, ReviewReRequested, ReviewDue, ReviewSubmitted:
 			if _, i := next.find(a.Item.ID); i >= 0 {
 				next.Items[i] = a.Item
 			}
@@ -694,7 +828,7 @@ func PendingActions(state State) []Action {
 func WakeDue(w WorkItem) (WakeReason, bool) {
 	switch {
 	case w.Kind == KindReviewRequest:
-		return WakeReview, w.State == PendingWorkspace
+		return WakeReview, w.State == PendingWorkspace || (w.State == Reviewing || w.State == Reviewed) && w.DueWake == WakeReview
 	case w.Kind != KindOwnedIssue:
 		return "", false
 	case w.State == PendingWorkspace:
@@ -731,7 +865,7 @@ func WorkspaceCreated(state State, id string, ws workspace.Workspace, now time.T
 
 // Woken records the Work Item's Wake for reason: the first Wake moves it to
 // InProgress, a ci-failure or feedback Wake to AddressingFeedback, a review
-// Wake to Reviewing.
+// Wake to Reviewing, its head now reviewed.
 func Woken(state State, id string, reason WakeReason, now time.Time) State {
 	return update(state, id, now, func(w *WorkItem) {
 		w.State = InProgress
@@ -740,6 +874,7 @@ func Woken(state State, id string, reason WakeReason, now time.Time) State {
 			w.State = AddressingFeedback
 		case reason == WakeReview:
 			w.State = Reviewing
+			w.ReviewedHeadSHA = w.HeadSHA
 		}
 		w.DueWake = ""
 		w.LastWakeAt = &now

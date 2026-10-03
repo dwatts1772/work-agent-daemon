@@ -183,3 +183,38 @@ func TestAReviewWorkspaceCannotPushToTheAuthorsBranch(t *testing.T) {
 		t.Errorf("a push from the Review Workspace moved the author's branch to %s", got)
 	}
 }
+
+func TestFetchReviewHeadRefreshesThePullRefWithoutCreatingAWorktree(t *testing.T) {
+	orca, stubs := newOrca(t, running())
+	stubs.SetFixture(t, testharness.Fixture{Orca: running(), PullRefs: map[string]string{"org/b#333": "sss"}})
+
+	if err := orca.FetchReviewHead(ctx, workspace.ReviewInput{Repo: "org/b", PR: 333, HeadSHA: "sss"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var fetches [][]string
+	for _, c := range stubs.Calls(t) {
+		if c.Bin == "git" && slices.Contains(c.Args, "fetch") {
+			fetches = append(fetches, c.Args)
+		}
+		if c.Bin == "orca" && slices.Contains(c.Args, "create") {
+			t.Errorf("orca %q: a re-review reuses the Review Workspace", c.Args)
+		}
+	}
+	clone := filepath.ToSlash(filepath.Join(stubs.Dir, "clones", "repo-b"))
+	want := []string{"-C", clone, "fetch", "origin", "+refs/pull/333/head:refs/remotes/origin/pr/333"}
+	if len(fetches) != 1 || !slices.Equal(fetches[0], want) {
+		t.Errorf("git fetches %q, want one git %q", fetches, want)
+	}
+}
+
+func TestFetchReviewHeadRefusesAPullRefThatMovedPastTheSettledHead(t *testing.T) {
+	orca, stubs := newOrca(t, running())
+	stubs.SetFixture(t, testharness.Fixture{Orca: running(), PullRefs: map[string]string{"org/b#333": "ttt"}})
+
+	err := orca.FetchReviewHead(ctx, workspace.ReviewInput{Repo: "org/b", PR: 333, HeadSHA: "sss"})
+
+	if err == nil || !strings.Contains(err.Error(), "sss") || !strings.Contains(err.Error(), "ttt") {
+		t.Errorf("err = %v, want one naming the Settled head sss and the fetched ttt", err)
+	}
+}
