@@ -70,6 +70,12 @@ func gh(fx testharness.Fixture, args []string) {
 	case len(args) >= 2 && args[0] == "issue" && args[1] == "list":
 		currentLogin(fx)
 		issueList(fx, args[2:])
+	case len(args) >= 3 && args[0] == "issue" && args[1] == "view":
+		currentLogin(fx)
+		issueView(fx, args[2], args[3:])
+	case len(args) >= 2 && args[0] == "pr" && args[1] == "list":
+		currentLogin(fx)
+		prList(fx, args[2:])
 	default:
 		fail(2, "stub gh: unsupported command %q", args)
 	}
@@ -117,7 +123,7 @@ func issueList(fx testharness.Fixture, args []string) {
 	repo := fs.String("repo", "", "")
 	assignee := fs.String("assignee", "", "")
 	label := fs.String("label", "", "")
-	fs.String("state", "open", "")
+	state := fs.String("state", "open", "")
 	fs.String("json", "", "")
 	fs.Int("limit", 30, "")
 	if err := fs.Parse(args); err != nil {
@@ -125,6 +131,9 @@ func issueList(fx testharness.Fixture, args []string) {
 	}
 	if *repo == "" {
 		fail(2, "stub gh: --repo is required")
+	}
+	if *state != "open" {
+		fail(2, "stub gh: only --state open is supported")
 	}
 	if *assignee == "@me" {
 		fail(2, "stub gh: @me resolves via the active account and is forbidden")
@@ -145,6 +154,9 @@ func issueList(fx testharness.Fixture, args []string) {
 	}
 	out := []issue{}
 	for _, is := range fx.Issues[*repo] {
+		if issueState(is) != "OPEN" {
+			continue
+		}
 		if *assignee != "" && !slices.Contains(is.Assignees, *assignee) {
 			continue
 		}
@@ -157,6 +169,93 @@ func issueList(fx testharness.Fixture, args []string) {
 		}
 		for _, a := range is.Assignees {
 			o.Assignees = append(o.Assignees, login{a})
+		}
+		out = append(out, o)
+	}
+	data, _ := json.Marshal(out)
+	fmt.Println(string(data))
+}
+
+func issueState(is testharness.Issue) string {
+	if is.State == "" {
+		return "OPEN"
+	}
+	return is.State
+}
+
+func issueView(fx testharness.Fixture, number string, args []string) {
+	fs := flag.NewFlagSet("issue view", flag.ContinueOnError)
+	repo := fs.String("repo", "", "")
+	fs.String("json", "", "")
+	if err := fs.Parse(args); err != nil {
+		fail(2, "stub gh: %v", err)
+	}
+	for _, is := range fx.Issues[*repo] {
+		if fmt.Sprint(is.Number) == number {
+			out, _ := json.Marshal(map[string]any{"number": is.Number, "state": issueState(is)})
+			fmt.Println(string(out))
+			return
+		}
+	}
+	fail(1, "GraphQL: Could not resolve to an issue or pull request with the number of %s.", number)
+}
+
+// prList lists the newest PRs first, as gh does.
+func prList(fx testharness.Fixture, args []string) {
+	fs := flag.NewFlagSet("pr list", flag.ContinueOnError)
+	repo := fs.String("repo", "", "")
+	author := fs.String("author", "", "")
+	state := fs.String("state", "open", "")
+	fs.String("json", "", "")
+	limit := fs.Int("limit", 30, "")
+	if err := fs.Parse(args); err != nil {
+		fail(2, "stub gh: %v", err)
+	}
+	if *repo == "" {
+		fail(2, "stub gh: --repo is required")
+	}
+	if *author == "@me" {
+		fail(2, "stub gh: @me resolves via the active account and is forbidden")
+	}
+	type ref struct {
+		Number     int `json:"number"`
+		Repository struct {
+			Name  string `json:"name"`
+			Owner struct {
+				Login string `json:"login"`
+			} `json:"owner"`
+		} `json:"repository"`
+	}
+	type pr struct {
+		Number      int    `json:"number"`
+		URL         string `json:"url"`
+		State       string `json:"state"`
+		HeadRefName string `json:"headRefName"`
+		Body        string `json:"body"`
+		Author      struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		ClosingIssuesReferences []ref `json:"closingIssuesReferences"`
+	}
+	out := []pr{}
+	prs := fx.PullRequests[*repo]
+	for i := len(prs) - 1; i >= 0 && len(out) < *limit; i-- {
+		p := prs[i]
+		if *author != "" && p.Author != *author {
+			continue
+		}
+		if *state != "all" && !strings.EqualFold(*state, p.State) {
+			continue
+		}
+		o := pr{Number: p.Number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", *repo, p.Number), State: p.State, HeadRefName: p.HeadRefName, Body: p.Body, ClosingIssuesReferences: []ref{}}
+		o.Author.Login = p.Author
+		for _, c := range p.ClosingIssues {
+			var r ref
+			repoName, num, _ := strings.Cut(c, "#")
+			owner, name, _ := strings.Cut(repoName, "/")
+			fmt.Sscan(num, &r.Number)
+			r.Repository.Name, r.Repository.Owner.Login = name, owner
+			o.ClosingIssuesReferences = append(o.ClosingIssuesReferences, r)
 		}
 		out = append(out, o)
 	}

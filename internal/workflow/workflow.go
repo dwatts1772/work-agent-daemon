@@ -34,6 +34,11 @@ const (
 	// ReadyToMerge is an Owned Issue whose PR has green, Settled CI and no
 	// actionable feedback; the Operator merges it.
 	ReadyToMerge ItemState = "READY_TO_MERGE"
+	// WaitingForCI is an Owned Issue with an open PR linked.
+	WaitingForCI ItemState = "WAITING_FOR_CI"
+	// Done is a Work Item whose PR was merged or closed, or whose issue was
+	// closed. It is final: the daemon never Wakes it or changes it again.
+	Done ItemState = "DONE"
 	// Failed is a Work Item whose daemon-owned action failed
 	// MaxActionFailures times in a row.
 	Failed ItemState = "FAILED"
@@ -90,6 +95,9 @@ type WorkItem struct {
 	IssueURL string    `json:"issueUrl"`
 	// Workspace is set once the Workspace exists.
 	Workspace *workspace.Workspace `json:"workspace,omitempty"`
+	// PR is the number of the pull request linked to the Work Item, if any.
+	PR    int    `json:"pr,omitempty"`
+	PRURL string `json:"prUrl,omitempty"`
 	// Pause is set while the item is Paused.
 	Pause *Pause `json:"pause,omitempty"`
 	// ProcessedEventIDs are the dedupe markers of every event already
@@ -119,6 +127,10 @@ func (s State) find(id string) (WorkItem, int) {
 	}
 	return WorkItem{}, -1
 }
+
+// Active reports whether w is an Owned Issue not yet Done, the only kind
+// of Work Item GitHub observations still change.
+func (w WorkItem) Active() bool { return w.Kind == KindOwnedIssue && w.State != Done }
 
 func (w WorkItem) clone() WorkItem {
 	w.ProcessedEventIDs = slices.Clone(w.ProcessedEventIDs)
@@ -152,15 +164,29 @@ const (
 	// away from the Operator, or it is otherwise missing from the Eligible
 	// issues.
 	IssueIneligible EventType = "ISSUE_INELIGIBLE"
+	// IssueClosed is the observation that a tracked Owned Issue is closed.
+	IssueClosed EventType = "ISSUE_CLOSED"
+	// PRDiscovered is the observation of an open PR for a tracked Owned
+	// Issue.
+	PRDiscovered EventType = "PR_DISCOVERED"
+	// PRMerged is the observation that the PR for a tracked Owned Issue is
+	// merged.
+	PRMerged EventType = "PR_MERGED"
+	// PRClosed is the observation that the PR for a tracked Owned Issue was
+	// closed without merging.
+	PRClosed EventType = "PR_CLOSED"
 )
 
 // Event is one observation from a Tick.
 type Event struct {
-	Type       EventType
-	Repo       string
-	Issue      int
-	Title      string
-	URL        string
+	Type  EventType
+	Repo  string
+	Issue int
+	Title string
+	URL   string
+	// PR and PRURL identify the pull request of a PR event.
+	PR         int
+	PRURL      string
 	ObservedAt time.Time
 }
 
@@ -191,6 +217,10 @@ const (
 	PauseItem ActionType = "PAUSE"
 	// ResumeItem records Item, no longer Paused.
 	ResumeItem ActionType = "RESUME"
+	// LinkPR records Item with its PR linked.
+	LinkPR ActionType = "LINK_PR"
+	// MarkDone records Item, now Done.
+	MarkDone ActionType = "DONE"
 )
 
 // Action is something the reducer decided should happen to Item; for every
@@ -212,6 +242,10 @@ func Reduce(state State, event Event) []Action {
 		return reduceAssigned(state, event)
 	case IssueIneligible:
 		return reduceIneligible(state, event)
+	case PRDiscovered:
+		return reducePRDiscovered(state, event)
+	case PRMerged, PRClosed, IssueClosed:
+		return reduceDone(state, event)
 	}
 	return nil
 }
@@ -220,7 +254,7 @@ func reduceAssigned(state State, event Event) []Action {
 	// The Work Item is keyed by the issue, so an issue already tracked is
 	// never recorded twice, whatever markers it carries.
 	if w, i := state.find(event.Ref()); i >= 0 {
-		if w.Pause == nil || !w.Pause.NotEligible {
+		if w.State == Done || w.Pause == nil || !w.Pause.NotEligible {
 			return nil
 		}
 		w.Pause.NotEligible = false
@@ -242,12 +276,53 @@ func reduceAssigned(state State, event Event) []Action {
 
 func reduceIneligible(state State, event Event) []Action {
 	w, i := state.find(event.Ref())
-	if i < 0 || w.Kind != KindOwnedIssue || (w.Pause != nil && w.Pause.NotEligible) {
+	if i < 0 || !w.Active() || (w.Pause != nil && w.Pause.NotEligible) {
 		return nil
 	}
 	w = paused(w, event.ObservedAt)
 	w.Pause.NotEligible = true
 	return []Action{{Type: PauseItem, Item: w}}
+}
+
+// reducePRDiscovered links an open PR to its Owned Issue. A Woken item moves
+// to WaitingForCI; a Paused one will resume there. The move is
+// level-triggered, so an item Woken after its PR was linked still moves.
+func reducePRDiscovered(state State, event Event) []Action {
+	w, i := state.find(event.Ref())
+	if i < 0 || !w.Active() {
+		return nil
+	}
+	changed := w.PR != event.PR || w.PRURL != event.PRURL
+	w.PR, w.PRURL = event.PR, event.PRURL
+	switch {
+	case w.State == InProgress:
+		w.State, changed = WaitingForCI, true
+	case w.Pause != nil && w.Pause.ResumeTo == InProgress:
+		w.Pause.ResumeTo, changed = WaitingForCI, true
+	}
+	if !changed {
+		return nil
+	}
+	w.UpdatedAt = event.ObservedAt
+	return []Action{{Type: LinkPR, Item: w}}
+}
+
+// reduceDone moves an Owned Issue whose PR was merged or closed, or whose
+// issue was closed, to Done from any state, ending any pause and dropping
+// any Held Wake: it is never Woken again.
+func reduceDone(state State, event Event) []Action {
+	w, i := state.find(event.Ref())
+	if i < 0 || !w.Active() {
+		return nil
+	}
+	if event.PR != 0 {
+		w.PR, w.PRURL = event.PR, event.PRURL
+	}
+	w.State = Done
+	w.Pause = nil
+	w.HeldWake = nil
+	w.UpdatedAt = event.ObservedAt
+	return []Action{{Type: MarkDone, Item: w}}
 }
 
 // paused returns w Paused, keeping any reasons it is already Paused for.
@@ -282,7 +357,7 @@ func Ineligible(state State, assigned []Event, at time.Time) []Event {
 	}
 	var events []Event
 	for _, w := range state.Items {
-		if w.Kind == KindOwnedIssue && !seen[w.ID] {
+		if w.Active() && !seen[w.ID] {
 			events = append(events, Event{Type: IssueIneligible, Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL, ObservedAt: at})
 		}
 	}
@@ -297,7 +372,7 @@ func Apply(state State, actions []Action) State {
 		switch a.Type {
 		case CreateOwnedIssue:
 			next.Items = append(next.Items, a.Item)
-		case PauseItem, ResumeItem:
+		case PauseItem, ResumeItem, LinkPR, MarkDone:
 			if _, i := next.find(a.Item.ID); i >= 0 {
 				next.Items[i] = a.Item
 			}

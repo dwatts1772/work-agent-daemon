@@ -32,6 +32,8 @@ var ghAllowed = map[string]bool{
 	"auth token": true,
 	"api":        true,
 	"issue list": true,
+	"issue view": true,
+	"pr list":    true,
 }
 
 func checkGH(args []string) error {

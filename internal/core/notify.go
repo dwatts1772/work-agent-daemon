@@ -22,8 +22,8 @@ func (d *Daemon) AddNotifier(n notify.Notifier) {
 // actions for Orca, and held that it Held them because Orca was
 // unavailable.
 //
-// Orca is consulted only for Work Items that are not Paused, so a Tick with
-// only Paused items never touches it. A signal that is not read this Tick —
+// Orca is consulted only for Work Items that are neither Paused nor Done, so
+// a Tick with only such items never touches it. A signal that is not read this Tick —
 // Orca's availability when Orca is not consulted, an agent's state while
 // Orca is unavailable or when it cannot be read — is unknown: the condition
 // stays as it was, so a waiting agent is not notified again once Orca is
@@ -31,7 +31,7 @@ func (d *Daemon) AddNotifier(n notify.Notifier) {
 func (d *Daemon) notify(ctx context.Context, st workflow.State, acted, held bool) {
 	var watched []workflow.WorkItem
 	for _, w := range st.Items {
-		if w.Workspace != nil && w.State != workflow.Paused {
+		if w.Workspace != nil && w.State != workflow.Paused && w.State != workflow.Done {
 			watched = append(watched, w)
 		}
 	}

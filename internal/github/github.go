@@ -115,3 +115,73 @@ func (c *Client) EligibleIssues(ctx context.Context, repo, label string) ([]Issu
 	}
 	return issues, nil
 }
+
+// prLimit caps one listing of the Operator's pull requests in a repo, newest
+// first; far above what the Operator opens between two Ticks.
+const prLimit = 100
+
+// OperatorPullRequests lists the pull requests in repo opened by the
+// Operator, in any state, newest first.
+func (c *Client) OperatorPullRequests(ctx context.Context, repo string) ([]PullRequest, error) {
+	out, err := c.gh(ctx, "pr", "list",
+		"--repo", repo,
+		"--author", c.account,
+		"--state", "all",
+		"--limit", strconv.Itoa(prLimit),
+		"--json", "number,url,state,headRefName,body,author,closingIssuesReferences",
+	)
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Number      int     `json:"number"`
+		URL         string  `json:"url"`
+		State       PRState `json:"state"`
+		HeadRefName string  `json:"headRefName"`
+		Body        string  `json:"body"`
+		Author      struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		ClosingIssuesReferences []struct {
+			Number     int `json:"number"`
+			Repository struct {
+				Name  string `json:"name"`
+				Owner struct {
+					Login string `json:"login"`
+				} `json:"owner"`
+			} `json:"repository"`
+		} `json:"closingIssuesReferences"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("parse pull requests for %s: %w", repo, err)
+	}
+
+	// Re-check the author, as EligibleIssues re-checks its filters.
+	var prs []PullRequest
+	for _, r := range raw {
+		if !strings.EqualFold(r.Author.Login, c.account) {
+			continue
+		}
+		pr := PullRequest{Repo: repo, Number: r.Number, URL: r.URL, State: r.State, HeadRefName: r.HeadRefName, Body: r.Body, Author: r.Author.Login}
+		for _, ref := range r.ClosingIssuesReferences {
+			pr.ClosingIssues = append(pr.ClosingIssues, ref.Repository.Owner.Login+"/"+ref.Repository.Name+"#"+strconv.Itoa(ref.Number))
+		}
+		prs = append(prs, pr)
+	}
+	return prs, nil
+}
+
+// IssueClosed reports whether issue number in repo is closed.
+func (c *Client) IssueClosed(ctx context.Context, repo string, number int) (bool, error) {
+	out, err := c.gh(ctx, "issue", "view", strconv.Itoa(number), "--repo", repo, "--json", "state")
+	if err != nil {
+		return false, err
+	}
+	var issue struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(out, &issue); err != nil {
+		return false, fmt.Errorf("parse issue %s#%d: %w", repo, number, err)
+	}
+	return strings.EqualFold(issue.State, "CLOSED"), nil
+}

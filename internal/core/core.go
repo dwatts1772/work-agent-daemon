@@ -121,17 +121,105 @@ func (d *Daemon) DryRun(ctx context.Context, current workflow.State) (Result, er
 
 // reconcile observes GitHub and applies what it saw to current, returning
 // the new state, how many Eligible issues were seen, and the actions taken.
-// observe sees every allowlisted repo, so a tracked Owned Issue it does not
-// report is no longer Eligible.
+// PRs are observed before missing issues, so a merged PR reaches Done
+// with the PR linked rather than via its closed issue. observe sees every
+// allowlisted repo, so a tracked Owned Issue it does not report is closed or
+// no longer Eligible.
 func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflow.State, int, []workflow.Action, error) {
-	assigned, err := d.observe(ctx)
+	now := time.Now().UTC()
+	assigned, err := d.observe(ctx, now)
 	if err != nil {
 		return workflow.State{}, 0, nil, err
 	}
-	events := append(assigned, workflow.Ineligible(current, assigned, time.Now().UTC())...)
-	next, actions := workflow.Reconcile(current, events)
+	next, actions := workflow.Reconcile(current, assigned)
+
+	prEvents, err := d.observePRs(ctx, next, now)
+	if err != nil {
+		return workflow.State{}, 0, nil, err
+	}
+	next, prActions := workflow.Reconcile(next, prEvents)
+	actions = append(actions, prActions...)
+
+	// An issue that cannot be read, such as a deleted one, is treated as no
+	// longer Eligible: it is Paused, never lost, and never fails the Tick.
+	missing := workflow.Ineligible(next, assigned, now)
+	for i, e := range missing {
+		closed, err := d.github.IssueClosed(ctx, e.Repo, e.Issue)
+		if err != nil {
+			d.log.Warn("cannot tell whether a missing Owned Issue is closed; treating it as not Eligible", "item", e.Ref(), "err", err)
+			continue
+		}
+		if closed {
+			missing[i].Type = workflow.IssueClosed
+		}
+	}
+	next, missingActions := workflow.Reconcile(next, missing)
+	actions = append(actions, missingActions...)
+
 	d.log.Info("tick", "eligible", len(assigned), "actions", len(actions))
 	return next, len(assigned), actions, nil
+}
+
+// observePRs lists the Operator's PRs in every repo with an Owned Issue not
+// yet Done, and turns each such item's PRs into at most one event.
+func (d *Daemon) observePRs(ctx context.Context, st workflow.State, now time.Time) ([]workflow.Event, error) {
+	prs := map[string][]github.PullRequest{}
+	var events []workflow.Event
+	for _, w := range st.Items {
+		if !w.Active() {
+			continue
+		}
+		repoPRs, ok := prs[w.Repo]
+		if !ok {
+			var err error
+			if repoPRs, err = d.github.OperatorPullRequests(ctx, w.Repo); err != nil {
+				return nil, fmt.Errorf("list pull requests in %s: %w", w.Repo, err)
+			}
+			prs[w.Repo] = repoPRs
+		}
+		if e, ok := prEvent(w, repoPRs, now); ok {
+			events = append(events, e)
+		}
+	}
+	return events, nil
+}
+
+// prEvent decides what w's PRs, newest first, say about it: the linked PR
+// being merged ends the item; otherwise an open PR is discovered, the newest
+// one winning; with none open, the linked PR (or else the newest) being
+// merged or closed ends the item.
+func prEvent(w workflow.WorkItem, prs []github.PullRequest, now time.Time) (workflow.Event, bool) {
+	branch := ""
+	if w.Workspace != nil {
+		branch = w.Workspace.Branch
+	}
+	var open, ended *github.PullRequest
+	for i := range prs {
+		pr := &prs[i]
+		if !pr.Covers(w.Repo, w.Issue, branch) {
+			continue
+		}
+		switch {
+		case pr.State == github.PROpen:
+			if open == nil {
+				open = pr
+			}
+		case ended == nil || pr.Number == w.PR:
+			ended = pr
+		}
+	}
+	e := workflow.Event{Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL, ObservedAt: now}
+	switch {
+	case open != nil && !(ended != nil && ended.Number == w.PR && ended.State == github.PRMerged):
+		e.Type, e.PR, e.PRURL = workflow.PRDiscovered, open.Number, open.URL
+	case ended != nil && ended.State == github.PRMerged:
+		e.Type, e.PR, e.PRURL = workflow.PRMerged, ended.Number, ended.URL
+	case ended != nil:
+		e.Type, e.PR, e.PRURL = workflow.PRClosed, ended.Number, ended.URL
+	default:
+		return workflow.Event{}, false
+	}
+	return e, true
 }
 
 // act carries out the pending Workspace actions against Orca, saving after
@@ -233,8 +321,7 @@ func (d *Daemon) failed(st workflow.State, id, action string, err error) workflo
 }
 
 // observe turns the Eligible issues across the allowlisted repos into events.
-func (d *Daemon) observe(ctx context.Context) ([]workflow.Event, error) {
-	now := time.Now().UTC()
+func (d *Daemon) observe(ctx context.Context, now time.Time) ([]workflow.Event, error) {
 	var events []workflow.Event
 	for _, repo := range d.cfg.GitHub.Repos {
 		issues, err := d.github.EligibleIssues(ctx, repo, d.cfg.GitHub.EligibilityLabel)
