@@ -10,7 +10,6 @@ type Review struct {
 	ID                string
 	Author            string
 	AuthorAssociation string
-	Body              string
 	// State is "COMMENTED", "CHANGES_REQUESTED", "APPROVED", "DISMISSED"
 	// or "PENDING".
 	State       string

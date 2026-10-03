@@ -88,6 +88,10 @@ const (
 	WakeFeedback WakeReason = "feedback"
 )
 
+// onPR reports whether a Wake for r is about the linked PR rather than the
+// issue.
+func (r WakeReason) onPR() bool { return r == WakeCIFailure || r == WakeFeedback }
+
 // HoldReason is why a Wake is Held.
 type HoldReason string
 
@@ -264,7 +268,8 @@ type Event struct {
 	// requested.
 	Feedback []Feedback
 	Approved bool
-	// QuietPeriod is how long comments must go quiet before they Wake.
+	// QuietPeriod is how long comments must go quiet before the daemon Wakes
+	// the Work Item for them.
 	QuietPeriod time.Duration
 	ObservedAt  time.Time
 }
@@ -307,7 +312,7 @@ const (
 	// CIFailed records Item with a ci-failure Wake due.
 	CIFailed ActionType = "CI_FAILED"
 	// FeedbackDue records Item with a feedback Wake due.
-	FeedbackDue ActionType = "FEEDBACK"
+	FeedbackDue ActionType = "FEEDBACK_DUE"
 	// CIPassed records Item, its head's CI Settled green, now waiting for
 	// review or ready to merge.
 	CIPassed ActionType = "CI_PASSED"
@@ -348,7 +353,9 @@ func Reduce(state State, event Event) []Action {
 //   - A new head moves the item back to WaitingForCI and drops a ci-failure
 //     Wake decided for the old head, which the new commit supersedes; a
 //     feedback Wake not yet carried out stays due.
-//   - The first time CI on a head Settles with a failure, a ci-failure Wake.
+//   - The first time CI on a head Settles with a failure, a ci-failure Wake,
+//     and an item not already addressing feedback goes back to WaitingForCI.
+//     While another Wake is due the failure waits for a later Tick.
 //   - New feedback holding a submitted review, or new comments whose newest
 //     is a Quiet Period old, one feedback Wake for the whole batch.
 //   - CI Settled green moves the item to ReadyToMerge when the PR is
@@ -367,9 +374,12 @@ func reducePR(state State, event Event) []Action {
 		}
 		last = HeadChanged
 	}
-	if event.Settled && event.Failed && w.State == WaitingForCI && w.DueWake == "" && !slices.Contains(w.ProcessedEventIDs, event.Marker()) {
+	if event.Settled && event.Failed && w.DueWake == "" && !slices.Contains(w.ProcessedEventIDs, event.Marker()) {
 		w.ProcessedEventIDs = append(w.ProcessedEventIDs, event.Marker())
 		w.DueWake = WakeCIFailure
+		if w.State != AddressingFeedback {
+			w.State = WaitingForCI
+		}
 		last = CIFailed
 	}
 	fresh := w.newFeedback(event.Feedback)
@@ -410,8 +420,9 @@ func (w WorkItem) newFeedback(feedback []Feedback) []Feedback {
 	return fresh
 }
 
-// batchReady reports whether a batch of new feedback Wakes now: it holds a
-// submitted review, or its newest comment is a Quiet Period old.
+// batchReady reports whether the daemon Wakes the Work Item for a batch of
+// new feedback now: it holds a submitted review, or its newest comment is a
+// Quiet Period old.
 func batchReady(batch []Feedback, now time.Time, quiet time.Duration) bool {
 	var newest time.Time
 	for _, f := range batch {
@@ -649,7 +660,7 @@ func WakePrompt(entrySkill string, reason WakeReason, ref string) string {
 // WakeRef is the reference a Wake for reason names: the issue for an issue
 // Wake, the linked PR for a ci-failure or feedback Wake.
 func (w WorkItem) WakeRef(reason WakeReason) string {
-	if reason == WakeCIFailure || reason == WakeFeedback {
+	if reason.onPR() {
 		return w.Repo + "#" + strconv.Itoa(w.PR)
 	}
 	return w.ID
@@ -668,7 +679,7 @@ func WorkspaceCreated(state State, id string, ws workspace.Workspace, now time.T
 func Woken(state State, id string, reason WakeReason, now time.Time) State {
 	return update(state, id, now, func(w *WorkItem) {
 		w.State = InProgress
-		if reason == WakeCIFailure || reason == WakeFeedback {
+		if reason.onPR() {
 			w.State = AddressingFeedback
 		}
 		w.DueWake = ""

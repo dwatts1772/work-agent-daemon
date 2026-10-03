@@ -184,6 +184,38 @@ func TestANewHeadKeepsAFeedbackWakeDue(t *testing.T) {
 	}
 }
 
+func TestAFailureSeenWhileAFeedbackWakeIsDueWakesAfterIt(t *testing.T) {
+	st, _ := Reconcile(State{Items: []WorkItem{waitingForCI("aaa")}}, []Event{observed("aaa", t1, review("R1", t1))})
+	failing := observed("aaa", t2, review("R1", t1))
+	failing.Failed = true
+	st, _ = Reconcile(st, []Event{failing})
+
+	st = Woken(st, "org/a#1", WakeFeedback, t2)
+	next, _ := Reconcile(st, []Event{failing})
+
+	if got := PendingActions(next); len(got) != 1 || got[0].Reason != WakeCIFailure {
+		t.Fatalf("PendingActions() = %+v; the head's failure still Wakes once", got)
+	}
+	next = Woken(next, "org/a#1", WakeCIFailure, t2)
+	if again, actions := Reconcile(next, []Event{failing}); len(actions) != 0 || len(PendingActions(again)) != 0 {
+		t.Errorf("the failure Woke twice: %+v", actions)
+	}
+}
+
+func TestAFailingReRunTakesTheItemOutOfReadyToMerge(t *testing.T) {
+	item := waitingForCI("aaa")
+	item.State = ReadyToMerge
+	e := observed("aaa", t1)
+	e.Approved, e.Failed = true, true
+
+	next, _ := Reconcile(State{Items: []WorkItem{item}}, []Event{e})
+
+	got, _ := next.Item("org/a#1")
+	if got.State != WaitingForCI || got.DueWake != WakeCIFailure {
+		t.Errorf("item = %s, due %q; want WAITING_FOR_CI with a ci-failure Wake due", got.State, got.DueWake)
+	}
+}
+
 func TestASettledFailureWinsOverNewFeedbackInTheSameTick(t *testing.T) {
 	e := observed("aaa", t1, review("R1", t1))
 	e.Failed = true

@@ -35,7 +35,8 @@ type GitHub struct {
 	// default.
 	PollIntervalSeconds int `json:"pollIntervalSeconds,omitempty"`
 	// QuietPeriodMinutes is the Quiet Period standalone comments must go
-	// quiet for before they Wake; 0 means the default.
+	// quiet for before the daemon Wakes the Work Item for them; 0 means the
+	// default.
 	QuietPeriodMinutes int `json:"quietPeriodMinutes,omitempty"`
 	// FeedbackBots are bot logins whose feedback counts though they lack
 	// write access, such as "coderabbitai[bot]".

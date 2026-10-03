@@ -224,7 +224,6 @@ func (c *Client) PullRequestStatus(ctx context.Context, repo string, number int,
 			ID                string    `json:"id"`
 			Author            author    `json:"author"`
 			AuthorAssociation string    `json:"authorAssociation"`
-			Body              string    `json:"body"`
 			State             string    `json:"state"`
 			SubmittedAt       time.Time `json:"submittedAt"`
 		} `json:"reviews"`
@@ -241,7 +240,7 @@ func (c *Client) PullRequestStatus(ctx context.Context, repo string, number int,
 	}
 	var reviews []Review
 	for _, r := range pr.Reviews {
-		reviews = append(reviews, Review{ID: r.ID, Author: r.Author.Login, AuthorAssociation: r.AuthorAssociation, Body: r.Body, State: r.State, SubmittedAt: r.SubmittedAt})
+		reviews = append(reviews, Review{ID: r.ID, Author: r.Author.Login, AuthorAssociation: r.AuthorAssociation, State: r.State, SubmittedAt: r.SubmittedAt})
 	}
 	var comments []Comment
 	for _, cm := range pr.Comments {

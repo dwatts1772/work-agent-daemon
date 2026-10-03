@@ -71,7 +71,7 @@ func TestASubmittedReviewWakesTheSameWorkspaceOnceResumingTheConversation(t *tes
 	if got := c.item(t, "org/a#1"); got.State != workflow.AddressingFeedback || got.Workspace.ClaudeSessionID != session {
 		t.Errorf("org/a#1 = %s with session %s, want ADDRESSING_FEEDBACK in the same session", got.State, got.Workspace.ClaudeSessionID)
 	}
-	if !strings.Contains(stdout, "FEEDBACK\torg/a#1") {
+	if !strings.Contains(stdout, "FEEDBACK_DUE\torg/a#1") {
 		t.Errorf("stdout does not report the feedback:\n%s", stdout)
 	}
 	if wts := c.stubs.OrcaWorktrees(t); len(wts) != 2 {
