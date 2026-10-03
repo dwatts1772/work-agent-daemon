@@ -23,10 +23,11 @@ type CreateInput struct {
 }
 
 // ReviewInput describes the Review Request a Review Workspace is created
-// for: PR in Repo.
+// for: PR in Repo, whose head commit HeadSHA has Settled CI.
 type ReviewInput struct {
-	Repo string
-	PR   int
+	Repo    string
+	PR      int
+	HeadSHA string
 }
 
 // AgentState is the live state of a Workspace's agent, read as a signal each

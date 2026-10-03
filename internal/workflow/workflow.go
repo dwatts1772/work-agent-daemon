@@ -555,8 +555,9 @@ func (s State) Item(id string) (WorkItem, bool) {
 
 // PendingActions decides the Workspace actions Work Items still need: one
 // in PendingWorkspace has its Workspace created if none is recorded, then is
-// Woken; an Owned Issue waiting for CI with a Wake due is Woken. They repeat on every
-// Tick until their outcome is recorded, which is how a Held Wake is retried.
+// Woken; an Owned Issue waiting for CI with a Wake due is Woken. They repeat
+// on every Tick until their outcome is recorded, which is how a Held Wake is
+// retried.
 func PendingActions(state State) []Action {
 	var actions []Action
 	for _, w := range state.Items {

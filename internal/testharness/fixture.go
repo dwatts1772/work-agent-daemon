@@ -28,6 +28,9 @@ type Fixture struct {
 	// EchoTokenOnError makes failing gh calls print GH_TOKEN to stderr, as
 	// a hostile stand-in for any tool that leaks its credentials in errors.
 	EchoTokenOnError bool `json:"echoTokenOnError"`
+	// PullRefs maps "owner/name#n" to the commit refs/pull/<n>/head is at
+	// when the stub git fetches it; by default the PR's HeadSHA.
+	PullRefs map[string]string `json:"pullRefs,omitempty"`
 	// Orca is the Orca runtime the stub orca simulates; nil means Orca is
 	// not running.
 	Orca *Orca `json:"orca,omitempty"`

@@ -25,7 +25,8 @@ func main() {
 	record(dir, bin, args)
 
 	data, err := os.ReadFile(filepath.Join(dir, testharness.FixtureFile))
-	if bin != "gh" && (bin != "orca" || os.IsNotExist(err)) {
+	isRevParse := bin == "git" && slices.Contains(args, "rev-parse")
+	if bin != "gh" && !isRevParse && (bin != "orca" || os.IsNotExist(err)) {
 		fmt.Printf("stub %s\n", bin)
 		return
 	}
@@ -38,6 +39,10 @@ func main() {
 	}
 	if bin == "orca" {
 		orca(dir, fx.Orca, args)
+		return
+	}
+	if isRevParse {
+		revParse(fx, args)
 		return
 	}
 	gh(fx, args)
@@ -305,6 +310,29 @@ func prView(fx testharness.Fixture, number string, args []string) {
 		return
 	}
 	fail(1, "GraphQL: Could not resolve to a PullRequest with the number of %s.", number)
+}
+
+// revParse resolves the refs/remotes/origin/pr/<n> a fetch of the pull ref
+// made in an Orca clone (`git -C <clones/<repo id>> rev-parse <ref>`): the
+// fixture's PullRefs entry, else the PR's head.
+func revParse(fx testharness.Fixture, args []string) {
+	ref := args[len(args)-1]
+	n, isPullRef := strings.CutPrefix(ref, "refs/remotes/origin/pr/")
+	repo := ""
+	if fx.Orca != nil && len(args) > 1 && args[0] == "-C" {
+		repo = fx.Orca.Repos[filepath.Base(args[1])]
+	}
+	if sha, ok := fx.PullRefs[repo+"#"+n]; isPullRef && ok {
+		fmt.Println(sha)
+		return
+	}
+	for _, p := range fx.PullRequests[repo] {
+		if isPullRef && fmt.Sprint(p.Number) == n && p.HeadSHA != "" {
+			fmt.Println(p.HeadSHA)
+			return
+		}
+	}
+	fail(128, "fatal: ambiguous argument '%s': unknown revision or path not in the working tree.", ref)
 }
 
 // rollup is checks as statusCheckRollup reports them.

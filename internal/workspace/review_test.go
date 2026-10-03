@@ -11,13 +11,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dwatts1772/work-agent-daemon/internal/testharness"
 	"github.com/dwatts1772/work-agent-daemon/internal/workspace"
 )
 
 func TestCreateForReviewFetchesThePullRefAndBranchesANewWorktreeFromIt(t *testing.T) {
 	orca, stubs := newOrca(t, running())
+	stubs.SetFixture(t, testharness.Fixture{Orca: running(), PullRefs: map[string]string{"org/b#333": "rrr"}})
 
-	ws, err := orca.CreateForReview(ctx, workspace.ReviewInput{Repo: "org/b", PR: 333})
+	ws, err := orca.CreateForReview(ctx, workspace.ReviewInput{Repo: "org/b", PR: 333, HeadSHA: "rrr"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +27,7 @@ func TestCreateForReviewFetchesThePullRefAndBranchesANewWorktreeFromIt(t *testin
 	var fetch, create []string
 	for _, c := range stubs.Calls(t) {
 		switch {
-		case c.Bin == "git":
+		case c.Bin == "git" && slices.Contains(c.Args, "fetch"):
 			fetch = c.Args
 		case c.Bin == "orca" && len(c.Args) > 1 && c.Args[1] == "create":
 			if fetch == nil {
@@ -54,6 +56,21 @@ func TestCreateForReviewFetchesThePullRefAndBranchesANewWorktreeFromIt(t *testin
 	}
 	if !uuidPattern.MatchString(ws.ClaudeSessionID) {
 		t.Errorf("ClaudeSessionID = %q, want a daemon-generated UUID", ws.ClaudeSessionID)
+	}
+}
+
+func TestCreateForReviewRefusesAPullRefThatMovedPastTheSettledHead(t *testing.T) {
+	orca, stubs := newOrca(t, running())
+	fx := testharness.Fixture{Orca: running(), PullRefs: map[string]string{"org/b#333": "sss"}}
+	stubs.SetFixture(t, fx)
+
+	_, err := orca.CreateForReview(ctx, workspace.ReviewInput{Repo: "org/b", PR: 333, HeadSHA: "rrr"})
+
+	if err == nil || !strings.Contains(err.Error(), "sss") || !strings.Contains(err.Error(), "rrr") {
+		t.Errorf("err = %v, want one naming the Settled head rrr and the fetched sss", err)
+	}
+	if wts := stubs.OrcaWorktrees(t); len(wts) != 0 {
+		t.Errorf("created %+v from a head whose CI is not Settled", wts)
 	}
 }
 
@@ -144,7 +161,7 @@ func TestAReviewWorkspaceCannotPushToTheAuthorsBranch(t *testing.T) {
 	g.mustGit(g.clone, "reset", "--hard", "origin/main")
 	authorHead := g.mustGit(origin, "rev-parse", "refs/heads/feature")
 
-	ws, err := workspace.NewOrca(g, t.TempDir()).CreateForReview(ctx, workspace.ReviewInput{Repo: "org/a", PR: 333})
+	ws, err := workspace.NewOrca(g, t.TempDir()).CreateForReview(ctx, workspace.ReviewInput{Repo: "org/a", PR: 333, HeadSHA: authorHead})
 	if err != nil {
 		t.Fatal(err)
 	}

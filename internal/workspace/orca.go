@@ -125,6 +125,9 @@ func (o *Orca) CreateForIssue(ctx context.Context, in CreateInput) (Workspace, e
 // Orca worktree on a new local branch review-pr-<n> starting there. Orca
 // creates that branch without tracking anything, so it has no path to push
 // to the PR author's branch. Like CreateForIssue it starts no agent.
+//
+// It refuses when the fetched head is not in.HeadSHA, the head whose CI
+// Settled: the author pushed since, and the new head is not yet Settled.
 func (o *Orca) CreateForReview(ctx context.Context, in ReviewInput) (Workspace, error) {
 	repo, err := o.repo(ctx, in.Repo)
 	if err != nil {
@@ -137,6 +140,13 @@ func (o *Orca) CreateForReview(ctx context.Context, in ReviewInput) (Workspace, 
 	base := repo.Remote + "/pr/" + n
 	if _, err := o.runner.Run(ctx, "git", []string{"-C", repo.Path, "fetch", repo.Remote, "+refs/pull/" + n + "/head:refs/remotes/" + base}); err != nil {
 		return Workspace{}, fmt.Errorf("fetch the head of %s#%d: %w", in.Repo, in.PR, err)
+	}
+	out, err := o.runner.Run(ctx, "git", []string{"-C", repo.Path, "rev-parse", "refs/remotes/" + base})
+	if err != nil {
+		return Workspace{}, fmt.Errorf("read the fetched head of %s#%d: %w", in.Repo, in.PR, err)
+	}
+	if head := strings.TrimSpace(string(out)); head != in.HeadSHA {
+		return Workspace{}, fmt.Errorf("the head of %s#%d moved from %s, whose CI Settled, to %s", in.Repo, in.PR, in.HeadSHA, head)
 	}
 	return o.create(ctx, repo, "review-pr-"+n, "--base-branch", base)
 }

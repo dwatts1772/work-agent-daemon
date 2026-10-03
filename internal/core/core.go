@@ -349,7 +349,7 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 // Review Request, otherwise the Owned Issue's Workspace.
 func (d *Daemon) createWorkspace(ctx context.Context, item workflow.WorkItem) (workspace.Workspace, error) {
 	if item.Kind == workflow.KindReviewRequest {
-		return d.workspaces.CreateForReview(ctx, workspace.ReviewInput{Repo: item.Repo, PR: item.PR})
+		return d.workspaces.CreateForReview(ctx, workspace.ReviewInput{Repo: item.Repo, PR: item.PR, HeadSHA: item.HeadSHA})
 	}
 	return d.workspaces.CreateForIssue(ctx, workspace.CreateInput{Repo: item.Repo, Issue: item.Issue})
 }

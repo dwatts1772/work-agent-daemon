@@ -89,7 +89,7 @@ func TestAReviewRequestGetsOneReviewWorkspaceAndReviewWakeOnceCIIsSettled(t *tes
 		t.Fatalf("Review Workspaces = %+v, want review-pr-333 in repo-a from origin/pr/333", wts)
 	}
 	if item.Workspace == nil || item.Workspace.OrcaIdentityKey != wts[0].IdentityKey || item.Workspace.Branch != "review-pr-333" {
-		t.Errorf("Workspace = %+v, want the review-pr-333 worktree", item.Workspace)
+		t.Errorf("Workspace = %+v, want the Review Workspace review-pr-333", item.Workspace)
 	}
 	want := []string{`claude --session-id ` + item.Workspace.ClaudeSessionID + ` "/work-item review org/a#333"`}
 	if got := reviewWakes(t, c); !slices.Equal(got, want) {
@@ -121,7 +121,7 @@ func TestAReviewWorkspaceIsBuiltFromTheFetchedPullRefAfterCIIsSettled(t *testing
 	createdAt := -1
 	for i, call := range c.stubs.Calls(t) {
 		switch {
-		case call.Bin == "git":
+		case call.Bin == "git" && slices.Contains(call.Args, "fetch"):
 			fetches = append(fetches, call.Args)
 		case call.Bin == "orca" && slices.Contains(call.Args, "review-pr-333"):
 			createdAt = i
@@ -135,6 +135,25 @@ func TestAReviewWorkspaceIsBuiltFromTheFetchedPullRefAfterCIIsSettled(t *testing
 	}
 	if len(fetches) != 1 || !slices.Contains(fetches[0], "+refs/pull/333/head:refs/remotes/origin/pr/333") {
 		t.Errorf("git calls = %q, want one fetch of the pull ref into origin/pr/333", fetches)
+	}
+}
+
+func TestAReviewWorkspaceIsNeverBuiltFromAHeadWhoseCIIsNotSettled(t *testing.T) {
+	// The author pushes sss after the Tick saw rrr Settled, before the
+	// pull ref is fetched.
+	fx := withReviewRequest("rrr", passed)
+	fx.PullRefs = map[string]string{"org/a#333": "sss"}
+	c := newCLI(t, fx)
+	c.mustTick(t)
+
+	if got := reviewWorktrees(t, c); len(got) != 0 {
+		t.Errorf("Review Workspaces %+v built from an unsettled head", got)
+	}
+	if got := reviewWakes(t, c); len(got) != 0 {
+		t.Errorf("review Wakes %q for an unsettled head", got)
+	}
+	if got := reviewItems(t, c); len(got) != 1 || got[0].State != workflow.PendingWorkspace || !strings.Contains(got[0].LastError, "sss") {
+		t.Errorf("Review Requests = %+v, want org/a#333 still pending, its failure recorded", got)
 	}
 }
 

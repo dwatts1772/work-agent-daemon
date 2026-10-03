@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -181,6 +182,13 @@ type ReviewRequest struct {
 	CI     CI
 }
 
+// reviewer is a requested reviewer of a pull request: a User with a login,
+// or a Team.
+type reviewer struct {
+	Typename string `json:"__typename"`
+	Login    string `json:"login"`
+}
+
 // ReviewRequests lists the open pull requests in repo, by other developers,
 // on which the Operator is requested as a reviewer by name — not through a
 // team — with the CI state of each head commit.
@@ -202,12 +210,9 @@ func (c *Client) ReviewRequests(ctx context.Context, repo string) ([]ReviewReque
 		Author struct {
 			Login string `json:"login"`
 		} `json:"author"`
-		HeadRefOid     string `json:"headRefOid"`
-		ReviewRequests []struct {
-			Typename string `json:"__typename"`
-			Login    string `json:"login"`
-		} `json:"reviewRequests"`
-		StatusCheckRollup []Check `json:"statusCheckRollup"`
+		HeadRefOid        string     `json:"headRefOid"`
+		ReviewRequests    []reviewer `json:"reviewRequests"`
+		StatusCheckRollup []Check    `json:"statusCheckRollup"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("parse review requests for %s: %w", repo, err)
@@ -217,10 +222,9 @@ func (c *Client) ReviewRequests(ctx context.Context, repo string) ([]ReviewReque
 	// explicit request of the Operator, on someone else's PR, counts.
 	var requests []ReviewRequest
 	for _, r := range raw {
-		requested := false
-		for _, rr := range r.ReviewRequests {
-			requested = requested || (rr.Typename == "User" && strings.EqualFold(rr.Login, c.account))
-		}
+		requested := slices.ContainsFunc(r.ReviewRequests, func(rr reviewer) bool {
+			return rr.Typename == "User" && strings.EqualFold(rr.Login, c.account)
+		})
 		if !requested || strings.EqualFold(r.Author.Login, c.account) {
 			continue
 		}
