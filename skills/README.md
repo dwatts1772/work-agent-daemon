@@ -9,6 +9,6 @@ Install it one of two ways:
   - macOS: `ln -s "$PWD/skills/work-item" ~/.claude/skills/work-item`
   - Windows (PowerShell): `New-Item -ItemType Junction -Path "$HOME\.claude\skills\work-item" -Target "$PWD\skills\work-item"`
 
-Override Routing with `~/.work-agent/routing.md` (Operator) or `docs/agents/work-item-routing.md` in a target repo (repo); both use the table format of `work-item/routing.md`.
+Routing layers and how they merge are defined in `work-item/SKILL.md`; overrides use the table format of `work-item/routing.md`.
 
 `go test ./skills/` pins the default Routing, the layer merge, and the push policy. `WORK_AGENT_LIVE_EVAL=1 go test ./skills/ -run Live` additionally asks a real `claude -p` to resolve Routing through fixture overrides.

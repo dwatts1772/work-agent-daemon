@@ -46,10 +46,10 @@ func routingTable(t *testing.T, path string) map[routeKey]string {
 	return rows
 }
 
-// resolve applies the layer-merge rule stated in SKILL.md: layers in order,
+// mergeLayers applies the layer-merge rule stated in SKILL.md: layers in order,
 // a row replaces any earlier row with the same Wake Reason and Situation,
 // new rows are added.
-func resolve(layers ...map[routeKey]string) map[routeKey]string {
+func mergeLayers(layers ...map[routeKey]string) map[routeKey]string {
 	out := map[routeKey]string{}
 	for _, layer := range layers {
 		maps.Copy(out, layer)
@@ -92,7 +92,7 @@ func TestDefaultRoutingCoversEveryWakeReason(t *testing.T) {
 
 	assertRoute(t, table, "issue", "unclear", "/grill-with-docs")
 	assertRoute(t, table, "issue", "large", "/grill-with-docs", "/to-spec", "/to-tickets")
-	assertRoute(t, table, "issue", "ready", "/implement")
+	assertRoute(t, table, "issue", "implementable", "/implement")
 	assertRoute(t, table, "feedback", "any", "address", "verify", "push (non-force)")
 	assertRoute(t, table, "ci-failure", "any", "/diagnosing-bugs", "verify", "push (non-force)")
 	assertRoute(t, table, "review", "first", "/code-review PR#<n>", "held for Operator approval")
@@ -104,23 +104,23 @@ func TestDefaultRoutingCoversEveryWakeReason(t *testing.T) {
 }
 
 func TestOverridesChangeRoutingWithRepoWinning(t *testing.T) {
-	def := routingTable(t, filepath.Join(skillDir, "routing.md"))
+	defaultLayer := routingTable(t, filepath.Join(skillDir, "routing.md"))
 	operator := routingTable(t, filepath.Join("testdata", "operator-routing.md"))
 	repo := routingTable(t, filepath.Join("testdata", "repo-routing.md"))
 
-	withOperator := resolve(def, operator)
+	withOperator := mergeLayers(defaultLayer, operator)
 	assertRoute(t, withOperator, "feedback", "any", "/operator-feedback")
 	assertRoute(t, withOperator, "ci-failure", "any", "/operator-ci")
 
-	withRepo := resolve(def, repo)
+	withRepo := mergeLayers(defaultLayer, repo)
 	assertRoute(t, withRepo, "feedback", "any", "/repo-feedback")
 	assertRoute(t, withRepo, "issue", "docs-only", "edit the docs directly")
 
-	all := resolve(def, operator, repo)
-	assertRoute(t, all, "feedback", "any", "/repo-feedback")   // repo beats Operator
-	assertRoute(t, all, "ci-failure", "any", "/operator-ci")   // Operator beats default
-	assertRoute(t, all, "issue", "ready", "/implement")        // untouched rows inherit
-	assertRoute(t, all, "issue", "docs-only", "edit the docs") // new rows add
+	all := mergeLayers(defaultLayer, operator, repo)
+	assertRoute(t, all, "feedback", "any", "/repo-feedback")    // repo beats Operator
+	assertRoute(t, all, "ci-failure", "any", "/operator-ci")    // Operator beats default
+	assertRoute(t, all, "issue", "implementable", "/implement") // untouched rows inherit
+	assertRoute(t, all, "issue", "docs-only", "edit the docs")  // new rows add
 }
 
 // The merge rule above is only as good as SKILL.md's statement of it: the
@@ -139,7 +139,7 @@ func TestSkillStatesLayerOrderAndMergeRule(t *testing.T) {
 		}
 		last = i
 	}
-	for _, phrase := range []string{"same Wake Reason and Situation", "repo override wins"} {
+	for _, phrase := range []string{"same Wake Reason and Situation", "repo override wins", "a specific Situation beats `any`"} {
 		if !strings.Contains(skill, phrase) {
 			t.Errorf("SKILL.md does not state %q", phrase)
 		}
@@ -165,6 +165,7 @@ func TestForbiddenActionsAppearOnlyAsGuardrails(t *testing.T) {
 	}
 }
 
+// ADR-0003 makes Review Workspaces unable to push; the skill states it too.
 func TestSkillStatesPushPolicy(t *testing.T) {
 	skill := readSkill(t)
 	for _, want := range []string{
@@ -192,6 +193,7 @@ func TestReReviewFocusesOnNewDiffAndUnresolvedPriorFindings(t *testing.T) {
 	section := skill[start:end]
 	for _, want := range []string{
 		"`new-head`",                     // selects the re-review route
+		"headRefOid",                     // compared with the PR head on GitHub, not the stale local HEAD
 		"work-item/review.md",            // held findings record the reviewed head
 		"submitted review",               // ...or the Operator's GitHub review does
 		"git reset --keep origin/pr/<n>", // Workspace moves to the new head
@@ -252,17 +254,17 @@ func TestLiveRoutingEval(t *testing.T) {
 		file("~/.work-agent/routing.md", filepath.Join("testdata", "operator-routing.md"))
 	const ask = "Apply only step 2 (Resolve Routing) of the skill above using exactly the layer files shown; any other layer does not exist. " +
 		"For each Wake Reason/Situation below, reply with one line `<reason>/<situation>: <route>` copying the winning route cell verbatim, and nothing else.\n" +
-		"feedback/any\nci-failure/any\nissue/ready\nissue/docs-only\n"
+		"feedback/any\nci-failure/any\nissue/implementable\nissue/docs-only\n"
 
 	cases := []struct {
 		name, prompt string
 		want         map[string]string
 	}{
 		{"operator only", base + ask, map[string]string{
-			"feedback/any": "/operator-feedback", "ci-failure/any": "/operator-ci", "issue/ready": "/implement",
+			"feedback/any": "/operator-feedback", "ci-failure/any": "/operator-ci", "issue/implementable": "/implement",
 		}},
 		{"operator and repo", base + file("docs/agents/work-item-routing.md", filepath.Join("testdata", "repo-routing.md")) + ask, map[string]string{
-			"feedback/any": "/repo-feedback", "ci-failure/any": "/operator-ci", "issue/ready": "/implement", "issue/docs-only": "edit the docs",
+			"feedback/any": "/repo-feedback", "ci-failure/any": "/operator-ci", "issue/implementable": "/implement", "issue/docs-only": "edit the docs",
 		}},
 	}
 	for _, c := range cases {
