@@ -119,10 +119,46 @@ func TestCheckRejectsUnknownBinaries(t *testing.T) {
 	}
 }
 
-func TestCheckAllowsOrcaAndClaude(t *testing.T) {
-	if err := Check("orca", []string{"status", "--json"}); err != nil {
-		t.Errorf("orca: %v", err)
+func TestCheckAllowsTheOrcaCommandsTheDaemonUses(t *testing.T) {
+	allowed := [][]string{
+		{"status", "--json"},
+		{"repo", "list", "--json"},
+		{"worktree", "create", "--repo", "id:r", "--name", "issue-4", "--no-parent", "--issue", "4", "--json"},
+		{"worktree", "ps", "--limit", "1000", "--json"},
+		{"worktree", "show", "--worktree", "identity:k", "--json"},
+		{"terminal", "list", "--worktree", "identity:k", "--json"},
+		{"terminal", "send", "--terminal", "h", "--text", "/work-item issue o/r#4", "--enter", "--json"},
+		{"terminal", "create", "--worktree", "identity:k", "--command", "claude --resume x \"y\"", "--json"},
 	}
+	for _, args := range allowed {
+		if err := Check("orca", args); err != nil {
+			t.Errorf("Check(orca %v) = %v, want allowed", args, err)
+		}
+	}
+}
+
+func TestCheckRejectsOrcaCommandsTheDaemonDoesNotUse(t *testing.T) {
+	rejected := [][]string{
+		{},
+		{"--json"},
+		{"open"},
+		{"repo", "add", "--path", "x"},
+		{"repo", "remove", "r"},
+		{"worktree", "remove", "--worktree", "identity:k"},
+		{"worktree", "delete", "identity:k"},
+		{"worktree"},
+		{"terminal", "kill", "--terminal", "h"},
+		{"terminal"},
+		{"pr", "merge"},
+	}
+	for _, args := range rejected {
+		if err := Check("orca", args); err == nil {
+			t.Errorf("Check(orca %v) allowed, want rejected", args)
+		}
+	}
+}
+
+func TestCheckAllowsClaude(t *testing.T) {
 	if err := Check("claude", []string{"--session-id", "x"}); err != nil {
 		t.Errorf("claude: %v", err)
 	}

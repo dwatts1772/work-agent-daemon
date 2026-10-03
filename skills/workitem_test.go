@@ -165,13 +165,15 @@ func TestForbiddenActionsAppearOnlyAsGuardrails(t *testing.T) {
 	}
 }
 
-// ADR-0003 makes Review Workspaces unable to push; the skill states it too.
+// ADR-0003 leaves a Review Workspace no upstream to push to; an explicit
+// refspec is still possible in git, so the skill's guardrail covers it.
 func TestSkillStatesPushPolicy(t *testing.T) {
 	skill := readSkill(t)
 	for _, want := range []string{
 		"gh pr create --draft",                            // PRs open as drafts
 		"Marking a PR ready for review is the Operator's", // ready is Operator-gated
 		"Review Workspace never pushes",                   // review side is read-only
+		"not even with an explicit refspec",               // git does not block HEAD:<branch> (#38)
 		"held for Operator approval",                      // findings wait for the Operator
 		"exactly what the Operator approved",              // and only approved text is submitted
 		"--force",                                         // the guardrail is spelled out
