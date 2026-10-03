@@ -20,8 +20,9 @@ import (
 // itemRef matches a Work Item reference, "owner/name#number".
 var itemRef = regexp.MustCompile(`^[^/\s#]+/[^/\s#]+#[1-9][0-9]*$`)
 
-// runList prints every Work Item, one per line. It reads state without
-// taking the lock, so it works beside a running Tick.
+// runList prints every Work Item, one per line, ending with its Held Wake
+// when it has one. It reads state without taking the lock, so it works
+// beside a running Tick.
 func runList(args []string, stdout, stderr io.Writer) int {
 	fs, configPath, err := flags("list", stderr)
 	if err != nil {
@@ -42,7 +43,11 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	for _, w := range st.Items {
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", w.ID, w.State, pausedBecause(&w), w.Title)
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s", w.ID, w.State, pausedBecause(&w), w.Title)
+		if held := core.View(w).HeldWake; held != "" {
+			fmt.Fprintf(stdout, "\t%s", held)
+		}
+		fmt.Fprintln(stdout)
 	}
 	return 0
 }

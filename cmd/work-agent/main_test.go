@@ -802,6 +802,27 @@ func TestListAndInspectShowPausedItemsAndWhy(t *testing.T) {
 	}
 }
 
+func TestListShowsHeldWakeAndWhy(t *testing.T) {
+	fx := world()
+	fx.Orca = nil
+	c := newCLI(t, fx)
+	c.mustTick(t)
+	fx.Orca = orcaRunning()
+	c.stubs.SetFixture(t, fx)
+	c.must(t, "wake", "org/a#1")
+
+	list := c.must(t, "list")
+
+	for _, want := range []string{
+		"org/a#1\tIN_PROGRESS\t-\tEligible in a\n",
+		"org/b#7\tPENDING_WORKSPACE\t-\tEligible in b\tissue Wake Held: Orca is unavailable\n",
+	} {
+		if !strings.Contains(list, want) {
+			t.Errorf("list missing %q:\n%s", want, list)
+		}
+	}
+}
+
 // Both items are Paused while still PENDING_WORKSPACE (Orca was down on the
 // first Tick), so with Orca back they must still get no Workspace or Wake.
 func TestPausedItemsTickWithoutTouchingOrcaClaudeOrGit(t *testing.T) {
