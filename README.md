@@ -42,9 +42,12 @@ On Windows the daemon runs `orca.exe`, never the `orca.cmd` shim beside it (the 
 
 ## Build
 
-From a clone of this repo (PowerShell on Windows, any shell on macOS):
+Clone this repo, then build from its root (PowerShell on Windows, any shell on macOS):
 
 ```sh
+git clone https://github.com/dwatts1772/work-agent-daemon.git
+cd work-agent-daemon
+
 go build -o bin/ ./cmd/work-agent
 
 npm --prefix cmd/work-agent-tray/frontend ci
@@ -65,7 +68,7 @@ go build -o bin/ ./cmd/work-agent-tray
 
 Put `bin/` somewhere stable before turning on start at login: the login item records the binary's absolute path.
 
-`go test ./...` runs every test against stub `gh` / `orca` / `claude` binaries; nothing touches GitHub or Orca.
+`go test ./...` runs every test against stub `gh` / `git` / `orca` / `claude` binaries; nothing touches GitHub or Orca.
 
 ## Pin the Operator's GitHub account
 

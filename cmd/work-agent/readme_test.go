@@ -30,13 +30,18 @@ func TestREADMEDocumentsEveryCommand(t *testing.T) {
 	if code := run(nil, &bytes.Buffer{}, &stderr); code != 2 {
 		t.Fatalf("run with no args exited %d, want the usage", code)
 	}
+	commands := 0
 	for _, line := range strings.Split(stderr.String(), "\n")[1:] {
 		command := strings.Fields(strings.ReplaceAll(line, "[--config path]", ""))
 		if len(command) == 0 {
 			continue
 		}
+		commands++
 		if !slices.ContainsFunc(documented, func(d []string) bool { return slices.Equal(d, command) }) {
 			t.Errorf("README does not document %q", strings.Join(command, " "))
 		}
+	}
+	if commands == 0 {
+		t.Fatalf("found no commands in the usage:\n%s", stderr.String())
 	}
 }
