@@ -12,7 +12,7 @@ How can the local, LLM-free daemon read the Operator's Claude plan usage (5-hour
 
 Recommendation for phase 2 is layered:
 
-1. **Proactive, primary:** each Tick, read `orca.exe account list --json` and use `result.rateLimits.claude`. When any window is over a configured threshold, or the snapshot is stale or in error, `FreeSlots` returns 0 and new Wakes become Held Wakes (why: `capacity`). The daemon never touches the OAuth token, makes no extra network call, and does nothing extra while idle.
+1. **Proactive, primary:** each Tick, read `orca.exe account list --json` and use `result.rateLimits.claude`. When any window is over a configured threshold, or the snapshot is stale or in error, `FreeSlots` returns 0 and new Wakes become Held Wakes (why: `capacity`). The daemon never touches the OAuth token, makes no extra network call, and does nothing extra while idle. **Prerequisite:** Orca's cache goes stale while it is unfocused, so phase 2 needs a live feed first (the Orca feature request, or Orca's statusline feed) — see Recommendation.
 2. **Reactive, backstop:** read the agent's terminal with `orca terminal read` only when Orca reports the Workspace's agent as `done` with `mainAgent.outcome = failure`, and match Claude's limit message to get a reset time. Hold until then.
 3. **Do not** read `~/.claude/.credentials.json` or call `api.anthropic.com/api/oauth/usage` from the daemon.
 4. File the drafted Orca feature request below so the field becomes a documented, versioned contract.
@@ -49,7 +49,7 @@ Recommendation for phase 2 is layered:
   - It also takes a live feed from the Claude statusline. `ingestLiveClaudeRateLimits` updates `session`/`weekly` from `rate_limits` posted to Orca's local hook server at `/statusline/claude` (`out/shared/claude-statusline-rate-limits.js`). Its comment says this feed costs no usage-endpoint budget *"(the endpoint 429s under Orca's polling)"*. Orca installs its managed statusline only when the user has none: `out/main/chunks/managed-agent-hook-controls-*.js` leaves a `user` statusLine alone. This Operator has their own statusLine (`~/.claude/settings.json` → a personal Python script), so the live feed is inactive here and the snapshot above came from `source: "oauth"`.
 - The capability list from `orca status --json` has no usage or rate-limit capability. `orca agent-context --json` documents `account list`, but nothing about `rateLimits`.
 
-**Stability:** Undocumented. The JSON-RPC method `accounts.list` is versioned only by Orca's general protocol, and `rateLimits` is an incidental field of the snapshot. The shape is internal and could change in any Orca release. Orca is shipped often (1.4.x). Mitigation: parse defensively, and treat a missing field, `status != "ok"`, `error != null`, or a stale `updatedAt` as "unknown", which fails closed (see Recommendation).
+**Stability:** Undocumented. The JSON-RPC method `accounts.list` is versioned only by Orca's general protocol, and `rateLimits` is an incidental field of the snapshot. The shape is internal and could change in any Orca release. Orca is shipped often (1.4.x). Mitigation: parse defensively, and treat a missing field, `status != "ok"`, `error != null`, or a stale `updatedAt` as "unknown", which degrades capacity (see Recommendation).
 
 **Freshness caveat:** With Orca minimised or unfocused and no managed statusline, the snapshot can be hours old. `updatedAt` is the signal to check. On this machine it was about 12 min old at first read, and a second read later in the session returned the identical `updatedAt` — the cache had not refreshed in between.
 
@@ -118,12 +118,20 @@ Recommendation for phase 2 is layered:
 
 ## Recommendation for phase 2
 
-1. **Add a `PlanUsage` signal**, read once per Tick and never stored (same treatment as Orca agent state, ADR-0001). The `WorkspaceBackend` adapter gets one more read, `planUsage()`, implemented as `orca.exe account list --json` (argv, absolute path, not `orca.cmd`). The adapter parses only `result.rateLimits.claude.{session,weekly,fableWeekly}.{usedPercent,resetsAt}`, `status`, `error`, and `updatedAt`.
+**Prerequisite — freshness.** Candidate 1 is only as fresh as Orca's cache. On this machine (Operator-owned `statusLine`, Orca often unfocused) the cache does not refresh while the daemon runs unattended, so without a fix the policy below would sit in its degraded "unknown" mode most of the time. Phase 2 must therefore secure one live feed before relying on the thresholds, in this order of preference:
+
+1. the Orca feature request below lands (`--max-age` refresh / background refresh while agents run), or
+2. Orca's managed statusline feed is active — the Operator either drops their own `statusLine` or has it forward the `rate_limits` JSON it already receives to Orca (Candidate 3 data reaching Candidate 1, no credential handling; 5h/7d only, Fable stays poll-only), or
+3. the statusline "tee" of Candidate 3 writes a file the daemon reads directly (5h/7d only).
+
+The threshold values below (80% / 90% / 30 min) are suggested starting points for the phase-2 implementer, not decisions made by this spike.
+
+1. **Add a `PlanUsage` signal**, read once per Tick and never stored (same treatment as Orca agent state, ADR-0001). The `workspace.Backend` seam (`internal/workspace/workspace.go`) gets one more read, e.g. `PlanUsage(ctx)`, implemented as `orca.exe account list --json` (argv, absolute path, not `orca.cmd`). The adapter parses only `result.rateLimits.claude.{session,weekly,fableWeekly}.{usedPercent,resetsAt}`, `status`, `error`, and `updatedAt`.
 2. **A smart `CapacityPolicy`** wraps `FixedSlots` (or later RAM/CPU). The interface needs the signal passed in, e.g. through the policy's constructor per Tick or an extra argument. Rules:
-   - `FreeSlots` is 0 for both kinds when `weekly` ≥ `weeklyHoldPercent` (suggest 80), `fableWeekly` ≥ the same threshold (only if Wakes run on Fable — the daemon does not pin a model today), or `session` ≥ `sessionHoldPercent` (suggest 90). Hold until the earliest relevant `resetsAt`. The resulting Wakes become Held Wakes (why: `capacity`).
-   - Fail closed but not frozen. If the snapshot is missing, errored, or `updatedAt` is older than a staleness bound (e.g. 30 min), allow **at most one** working agent in total and notify the Operator ("plan usage unknown"). This avoids both blind bursts and a permanently stalled daemon when Orca is minimised.
+   - `FreeSlots` is 0 for both kinds when `weekly` ≥ `weeklyHoldPercent` (suggest 80), `fableWeekly` ≥ the same threshold (gated whenever Orca reports it: the daemon does not pin a model, so Wakes run on whatever the Operator's Claude default is, which may be Fable), or `session` ≥ `sessionHoldPercent` (suggest 90). Hold until the earliest relevant `resetsAt`. The resulting Wakes become Held Wakes (why: `capacity`).
+   - Degrade, don't freeze. If the snapshot is missing, errored, or `updatedAt` is older than a staleness bound (e.g. 30 min), allow **at most one** working agent in total and notify the Operator ("plan usage unknown"). This avoids both blind bursts and a permanently stalled daemon when Orca is minimised.
    - Optional: reserve headroom for the Operator's own interactive use by lowering thresholds when the Operator is active. Out of scope here.
-3. **Backstop.** When `worktree ps` shows a Work Item's agent `done` with `mainAgent.outcome == "failure"`, read its terminal (`orca terminal read --terminal <h> --limit 200 --json`) and run limit and auth-expiry detection modelled on the coding-agent-loop design (phrases, reset epoch, 24h sanity cap, backoff ladder). On a limit hit, set an in-memory "plan limited until T" signal that forces `FreeSlots` to 0, and notify. This state is in memory only, because the next Tick re-derives it from the proactive source. Auth expiry is a Notifier event, not a Hold.
+3. **Backstop.** When `worktree ps` shows a Work Item's agent `done` with `mainAgent.outcome == "failure"`, read its terminal (`orca terminal read --terminal <h> --limit 200 --json`) and run limit and auth-expiry detection modelled on the coding-agent-loop design (phrases, reset epoch, 24h sanity cap, backoff ladder). On a limit hit, set an in-memory "plan limited until T" signal that forces `FreeSlots` to 0, and notify. This state is in memory only, because the next Tick re-derives it from the proactive source. Auth expiry is a notification to the Operator, not a Hold.
 4. **Never** read `~/.claude/.credentials.json` or call `/api/oauth/usage` from the daemon.
 5. **Correct PRD §9** ("Orca does not expose … Claude plan usage through the CLI") and §19 in the implementation PR, and file the Orca request below.
 
@@ -170,9 +178,9 @@ Recommendation for phase 2 is layered:
 - Orca CLI 1.4.219 output: `orca.exe --help`, `status --json`, `agent-context [--json]`, `account list --json`, `terminal read --help`, `worktree ps --json` (run 2026-10-02).
 - Orca bundle `<orca install>/resources/app.asar` and `app.asar.unpacked` (MIT, `package.json` homepage https://github.com/stablyai/orca):
   - `app.asar.unpacked/out/cli/handlers/account.js` (`accounts.list`, `refreshUsage: false`); `out/shared/rpc-contract/accounts-params.js`
-  - `out/main/index.js` (RPC table with `accounts.list`/`accounts.subscribe`; usage fetch `https://api.anthropic.com/api/oauth/usage` with headers; Fable `weekly_scoped` parsing; credentials-file/keychain lookup; poll interval `900*1e3`, min `30*1e3`, `shouldBackgroundPoll`; `rateLimits:*` IPC; `/statusline/claude` ingest; `StopFailure` → `done`/`failure`)
-  - `out/shared/claude-statusline-rate-limits.js` (statusline feed, 429 note)
-  - `out/main/chunks/managed-agent-hook-controls-Ca9KzOKu.js` (managed statusline install only when user has none)
+  - `app.asar` → `out/main/index.js` (RPC table with `accounts.list`/`accounts.subscribe`; usage fetch `https://api.anthropic.com/api/oauth/usage` with headers; Fable `weekly_scoped` parsing; credentials-file/keychain lookup; poll interval `900*1e3`, min `30*1e3`, `shouldBackgroundPoll`; `rateLimits:*` IPC; `/statusline/claude` ingest; `StopFailure` → `done`/`failure`)
+  - `app.asar` → `out/shared/claude-statusline-rate-limits.js` (statusline feed, 429 note)
+  - `app.asar` → `out/main/chunks/managed-agent-hook-controls-Ca9KzOKu.js` (managed statusline install only when user has none)
 - https://github.com/stablyai/orca and https://github.com/stablyai/orca/issues
 - https://code.claude.com/docs/en/statusline (`rate_limits` fields and presence rules)
 - https://code.claude.com/docs/en/hooks (`StopFailure` `error_type` values, `Notification` quota types)
