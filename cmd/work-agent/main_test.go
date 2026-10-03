@@ -28,7 +28,16 @@ type cli struct {
 	configPath string
 }
 
+// newCLI runs the daemon against fx with a slot for every Owned Issue in
+// world(), so tests of anything but capacity never wait for one.
 func newCLI(t *testing.T, fx testharness.Fixture) *cli {
+	t.Helper()
+	return newCLIWithCapacity(t, fx, map[string]any{"ownedIssueSlots": 2})
+}
+
+// newCLIWithCapacity runs the daemon against fx with the given capacity
+// config; empty means the default slots.
+func newCLIWithCapacity(t *testing.T, fx testharness.Fixture, capacity map[string]any) *cli {
 	t.Helper()
 	// Claude's config directory, where its session transcripts live.
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
@@ -42,6 +51,7 @@ func newCLI(t *testing.T, fx testharness.Fixture) *cli {
 			"feedbackBots":     []string{"coderabbitai[bot]"},
 		},
 		"binaries": stubs.Paths,
+		"capacity": capacity,
 	}
 	data, _ := json.Marshal(cfg)
 	path := filepath.Join(t.TempDir(), "config.json")

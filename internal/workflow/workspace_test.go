@@ -106,6 +106,18 @@ func TestHeldRecordsTheHoldAndKeepsItsStartAcrossTicks(t *testing.T) {
 	}
 }
 
+func TestAHeldWakeKeepsItsPlaceInLineWhenHeldForAnotherReason(t *testing.T) {
+	st := State{Items: []WorkItem{ownedIssue("org/a", 1)}}
+
+	st = Held(st, "org/a#1", WakeIssue, HoldBackendUnavailable, t1)
+	st = Held(st, "org/a#1", WakeIssue, HoldCapacity, t2)
+
+	want := &HeldWake{Reason: WakeIssue, Since: t1, Why: HoldCapacity}
+	if !reflect.DeepEqual(st.Items[0].HeldWake, want) {
+		t.Errorf("HeldWake = %+v, want %+v", st.Items[0].HeldWake, want)
+	}
+}
+
 func TestRepeatedActionFailuresMoveTheItemToFailed(t *testing.T) {
 	st := State{Items: []WorkItem{ownedIssue("org/a", 1)}}
 
