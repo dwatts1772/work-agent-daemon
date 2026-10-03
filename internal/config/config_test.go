@@ -47,6 +47,7 @@ func TestLoadReadsOperatorReposLabelAndBinaryOverrides(t *testing.T) {
 			PollIntervalSeconds: 30,
 		},
 		Claude:   Claude{EntrySkill: "/work-item"},
+		Capacity: Capacity{OwnedIssueSlots: 1},
 		Binaries: map[string]string{"gh": gh, "git": git, "orca": orca, "claude": claude},
 	}
 	if !reflect.DeepEqual(cfg, want) {
@@ -109,6 +110,28 @@ func TestFeedbackSettings(t *testing.T) {
 
 	if _, err := Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l","quietPeriodMinutes":-1}}`)); err == nil || !strings.Contains(err.Error(), "github.quietPeriodMinutes") {
 		t.Errorf("err = %v, want a negative Quiet Period rejected", err)
+	}
+}
+
+func TestCapacitySlots(t *testing.T) {
+	cfg, err := Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned, review := cfg.Slots(); owned != 1 || review != 1 {
+		t.Errorf("Slots() = %d, %d, want the default 1, 1", owned, review)
+	}
+
+	cfg, err = Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"capacity":{"ownedIssueSlots":3,"reviewRequestSlots":2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned, review := cfg.Slots(); owned != 3 || review != 2 {
+		t.Errorf("Slots() = %d, %d, want 3, 2", owned, review)
+	}
+
+	if _, err := Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"capacity":{"reviewRequestSlots":-1}}`)); err == nil || !strings.Contains(err.Error(), "capacity") {
+		t.Errorf("err = %v, want negative slots rejected", err)
 	}
 }
 

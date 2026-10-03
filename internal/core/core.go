@@ -340,6 +340,14 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 		return true, commit(next)
 	}
 
+	actions, held := workflow.Admit(actions, d.agents(ctx, st), d.capacity())
+	for _, a := range held {
+		d.log.Info("no free capacity slot; holding the Wake until a later Tick", "item", a.Item.ID, "reason", a.Reason)
+		if err := commit(workflow.Held(st, a.Item.ID, a.Reason, workflow.HoldCapacity, time.Now().UTC())); err != nil {
+			return false, err
+		}
+	}
+
 	created := map[string]bool{}
 	for _, a := range actions {
 		item, ok := st.Item(a.Item.ID)
@@ -373,6 +381,32 @@ func (d *Daemon) act(ctx context.Context, store *state.Store, st workflow.State,
 		}
 	}
 	return false, nil
+}
+
+// capacity is the CapacityPolicy deciding how many Wakes may proceed.
+func (d *Daemon) capacity() workflow.CapacityPolicy {
+	owned, review := d.cfg.Slots()
+	return workflow.FixedSlots{OwnedIssue: owned, ReviewRequest: review}
+}
+
+// agents reads the state of the agent in every Workspace of a Work Item not
+// yet Done, as signals for the CapacityPolicy that are never stored
+// (ADR-0001). An agent whose state cannot be read is taken to be working, so
+// it keeps its slot rather than letting another Wake over capacity.
+func (d *Daemon) agents(ctx context.Context, st workflow.State) []workflow.AgentSnapshot {
+	var agents []workflow.AgentSnapshot
+	for _, w := range st.Items {
+		if w.Workspace == nil || w.State == workflow.Done {
+			continue
+		}
+		s, err := d.workspaces.AgentState(ctx, *w.Workspace)
+		if err != nil {
+			d.log.Warn("cannot read agent state; it keeps its capacity slot this Tick", "item", w.ID, "err", err)
+			s = workspace.AgentWorking
+		}
+		agents = append(agents, workflow.AgentSnapshot{Item: w.ID, Kind: w.Kind, State: s})
+	}
+	return agents
 }
 
 // createWorkspace creates item's Workspace: a Review Workspace for a

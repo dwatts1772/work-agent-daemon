@@ -20,6 +20,9 @@ type Config struct {
 	GitHub GitHub `json:"github"`
 	Claude Claude `json:"claude"`
 	Notify Notify `json:"notify"`
+	// Capacity is how many Wakes of each kind of Work Item may proceed at
+	// once.
+	Capacity Capacity `json:"capacity"`
 	// Binaries optionally overrides where gh, git, orca and claude live, for
 	// login items whose minimal PATH cannot find them. Paths must be absolute.
 	Binaries map[string]string `json:"binaries,omitempty"`
@@ -73,6 +76,28 @@ type Notify struct {
 	// Desktop turns the tray app's native desktop notifications on or off;
 	// nil means on. The console/JSONL log is always on.
 	Desktop *bool `json:"desktop,omitempty"`
+}
+
+// Capacity is the fixed slots of the MVP CapacityPolicy: how many agents of
+// each kind of Work Item may be working at once. 0 means the default.
+type Capacity struct {
+	OwnedIssueSlots    int `json:"ownedIssueSlots,omitempty"`
+	ReviewRequestSlots int `json:"reviewRequestSlots,omitempty"`
+}
+
+// defaultSlots is the slots of each kind by default.
+const defaultSlots = 1
+
+// Slots returns the Owned Issue and Review Request slots.
+func (c Config) Slots() (ownedIssue, reviewRequest int) {
+	ownedIssue, reviewRequest = c.Capacity.OwnedIssueSlots, c.Capacity.ReviewRequestSlots
+	if ownedIssue == 0 {
+		ownedIssue = defaultSlots
+	}
+	if reviewRequest == 0 {
+		reviewRequest = defaultSlots
+	}
+	return ownedIssue, reviewRequest
 }
 
 // DesktopNotifications reports whether the tray app delivers native desktop
@@ -137,6 +162,9 @@ func (c Config) validate() error {
 	}
 	if c.GitHub.QuietPeriodMinutes < 0 {
 		return fmt.Errorf("github.quietPeriodMinutes must be positive")
+	}
+	if c.Capacity.OwnedIssueSlots < 0 || c.Capacity.ReviewRequestSlots < 0 {
+		return fmt.Errorf("capacity slots must be positive")
 	}
 	if !entrySkillPattern.MatchString(c.Claude.EntrySkill) {
 		return fmt.Errorf("claude.entrySkill %q must be a single skill name such as %s", c.Claude.EntrySkill, DefaultEntrySkill)

@@ -108,6 +108,9 @@ const (
 	// HoldAgentWorking holds a Wake while Orca reports the Workspace's agent
 	// as working.
 	HoldAgentWorking HoldReason = "agent-working"
+	// HoldCapacity holds a Wake while the CapacityPolicy has no free slot
+	// for its kind of Work Item.
+	HoldCapacity HoldReason = "capacity"
 )
 
 // HeldWake is a Wake the daemon decided on but deferred; it is retried on a
@@ -883,13 +886,19 @@ func Woken(state State, id string, reason WakeReason, now time.Time) State {
 }
 
 // Held records that the Work Item's Wake is Held. Holding an already Held
-// Wake for the same reason changes nothing, so the hold keeps its start.
+// Wake for the same reason changes nothing, and holding it for another
+// HoldReason keeps its start, so it keeps its place in the FIFO release
+// order.
 func Held(state State, id string, reason WakeReason, why HoldReason, now time.Time) State {
-	if w, ok := state.Item(id); ok && w.HeldWake != nil && w.HeldWake.Reason == reason && w.HeldWake.Why == why {
-		return state
+	since := now
+	if w, ok := state.Item(id); ok && w.HeldWake != nil && w.HeldWake.Reason == reason {
+		if w.HeldWake.Why == why {
+			return state
+		}
+		since = w.HeldWake.Since
 	}
 	return update(state, id, now, func(w *WorkItem) {
-		w.HeldWake = &HeldWake{Reason: reason, Since: now, Why: why}
+		w.HeldWake = &HeldWake{Reason: reason, Since: since, Why: why}
 	})
 }
 
