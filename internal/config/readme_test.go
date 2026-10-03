@@ -14,7 +14,9 @@ func TestREADMEConfigExampleLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, section, ok := strings.Cut(string(readme), "\n## Configure\n")
+	// A Windows checkout may have CRLF line endings.
+	text := strings.ReplaceAll(string(readme), "\r\n", "\n")
+	_, section, ok := strings.Cut(text, "\n## Configure\n")
 	if !ok {
 		t.Fatal("README has no ## Configure section")
 	}

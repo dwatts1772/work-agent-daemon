@@ -16,7 +16,8 @@ func TestREADMEDocumentsEveryCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	var documented [][]string
-	for line := range strings.SplitSeq(string(readme), "\n") {
+	// A Windows checkout may have CRLF line endings.
+	for line := range strings.SplitSeq(strings.ReplaceAll(string(readme), "\r\n", "\n"), "\n") {
 		fields := strings.Fields(line)
 		if i := slices.Index(fields, "#"); i >= 0 {
 			fields = fields[:i]
