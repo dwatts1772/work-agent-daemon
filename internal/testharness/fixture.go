@@ -21,8 +21,10 @@ type Fixture struct {
 	// ActiveAccount is gh's active account, used when no GH_TOKEN is set.
 	// The daemon must never depend on it.
 	ActiveAccount string `json:"activeAccount"`
-	// Issues lists open issues per "owner/name" repo.
+	// Issues lists issues per "owner/name" repo.
 	Issues map[string][]Issue `json:"issues"`
+	// PullRequests lists pull requests per "owner/name" repo, oldest first.
+	PullRequests map[string][]PullRequest `json:"pullRequests,omitempty"`
 	// EchoTokenOnError makes failing gh calls print GH_TOKEN to stderr, as
 	// a hostile stand-in for any tool that leaks its credentials in errors.
 	EchoTokenOnError bool `json:"echoTokenOnError"`
@@ -55,11 +57,26 @@ type OrcaWorktree struct {
 }
 
 type Issue struct {
-	Number    int      `json:"number"`
+	Number int `json:"number"`
+	// State is "OPEN" (the default when empty) or "CLOSED".
+	State     string   `json:"state,omitempty"`
 	Title     string   `json:"title"`
 	URL       string   `json:"url"`
 	Labels    []string `json:"labels"`
 	Assignees []string `json:"assignees"`
+}
+
+// PullRequest is a pull request the stub gh reports.
+type PullRequest struct {
+	Number int `json:"number"`
+	// State is "OPEN", "MERGED" or "CLOSED".
+	State       string `json:"state"`
+	HeadRefName string `json:"headRefName"`
+	Body        string `json:"body"`
+	Author      string `json:"author"`
+	// ClosingIssues are the "owner/name#number" issues GitHub links to the
+	// PR as ones it closes.
+	ClosingIssues []string `json:"closingIssues,omitempty"`
 }
 
 // Call is one recorded stub invocation.
