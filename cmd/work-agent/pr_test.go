@@ -170,3 +170,21 @@ func TestDryRunReportsPRLinksAndWritesNothing(t *testing.T) {
 		t.Error("--dry-run wrote to the state directory")
 	}
 }
+
+func TestMergingTheLinkedPRIsDoneEvenWithAnotherOpenPRForTheIssue(t *testing.T) {
+	stale := testharness.PullRequest{Number: 61, State: "OPEN", HeadRefName: "spike", Body: "Fixes #1", Author: operator}
+	c := newCLI(t, withPRs(world(), prFor1("OPEN")))
+	c.mustTick(t)
+	c.mustTick(t)
+	if got := c.item(t, "org/a#1"); got.PR != 60 {
+		t.Fatalf("org/a#1 linked to PR %d, want 60", got.PR)
+	}
+
+	// The merge does not close the issue: PR 60 has no closing keyword.
+	c.stubs.SetFixture(t, withPRs(world(), prFor1("MERGED"), stale))
+	c.mustTick(t)
+
+	if got := c.item(t, "org/a#1"); got.State != workflow.Done || got.PR != 60 {
+		t.Errorf("org/a#1 = %s with PR %d, want DONE with the merged PR 60", got.State, got.PR)
+	}
+}

@@ -30,12 +30,11 @@ type PullRequest struct {
 }
 
 var (
-	// issueBranch finds an issue number in a branch name: after "issue-",
-	// "issue_", "issue/" or "issues/", or at the start of a path segment and
-	// followed by "-" or "_" (GitHub's "create a branch" names). The number
-	// must end the branch or be followed by a separator, so issue-42 never
-	// reads as issue 4.
-	issueBranch = regexp.MustCompile(`(?i)(?:(?:^|[/_-])issues?[-_/]?|(?:^|/))([0-9]+)(?:$|[/_-])`)
+	// issueBranch finds an issue number in a branch name after "issue-",
+	// "issue_", "issue/" or "issues/". The number must end the branch or be
+	// followed by a separator, so issue-42 never reads as issue 4. A bare
+	// leading number is not enough: "2024-cleanup" is not issue 2024.
+	issueBranch = regexp.MustCompile(`(?i)(?:^|[/_-])issues?[-_/]?([0-9]+)(?:$|[/_-])`)
 	// closingRef finds a GitHub closing keyword and the issue it closes:
 	// "#n", "owner/name#n" or the issue's URL. \b keeps "Prefixes #4" and
 	// "#42" from reading as "fixes #4".

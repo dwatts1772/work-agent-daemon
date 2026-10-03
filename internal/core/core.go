@@ -106,8 +106,8 @@ func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflo
 	if err != nil {
 		return workflow.State{}, 0, nil, err
 	}
-	next, more := workflow.Reconcile(next, prEvents)
-	actions = append(actions, more...)
+	next, prActions := workflow.Reconcile(next, prEvents)
+	actions = append(actions, prActions...)
 
 	// An issue that cannot be read, such as a deleted one, is treated as no
 	// longer Eligible: it is Paused, never lost, and never fails the Tick.
@@ -122,8 +122,8 @@ func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflo
 			missing[i].Type = workflow.IssueClosed
 		}
 	}
-	next, more = workflow.Reconcile(next, missing)
-	actions = append(actions, more...)
+	next, missingActions := workflow.Reconcile(next, missing)
+	actions = append(actions, missingActions...)
 
 	d.log.Info("tick", "eligible", len(assigned), "actions", len(actions))
 	return next, len(assigned), actions, nil
@@ -135,7 +135,7 @@ func (d *Daemon) observePRs(ctx context.Context, st workflow.State, now time.Tim
 	prs := map[string][]github.PullRequest{}
 	var events []workflow.Event
 	for _, w := range st.Items {
-		if w.Kind != workflow.KindOwnedIssue || w.State == workflow.Done {
+		if !w.Active() {
 			continue
 		}
 		repoPRs, ok := prs[w.Repo]
@@ -153,9 +153,10 @@ func (d *Daemon) observePRs(ctx context.Context, st workflow.State, now time.Tim
 	return events, nil
 }
 
-// prEvent decides what w's PRs, newest first, say about it: an open PR is
-// discovered, the newest one winning; with none open, the linked PR (or else
-// the newest) being merged or closed ends the item.
+// prEvent decides what w's PRs, newest first, say about it: the linked PR
+// being merged ends the item; otherwise an open PR is discovered, the newest
+// one winning; with none open, the linked PR (or else the newest) being
+// merged or closed ends the item.
 func prEvent(w workflow.WorkItem, prs []github.PullRequest, now time.Time) (workflow.Event, bool) {
 	branch := ""
 	if w.Workspace != nil {
@@ -178,7 +179,7 @@ func prEvent(w workflow.WorkItem, prs []github.PullRequest, now time.Time) (work
 	}
 	e := workflow.Event{Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL, ObservedAt: now}
 	switch {
-	case open != nil:
+	case open != nil && !(ended != nil && ended.Number == w.PR && ended.State == github.PRMerged):
 		e.Type, e.PR, e.PRURL = workflow.PRDiscovered, open.Number, open.URL
 	case ended != nil && ended.State == github.PRMerged:
 		e.Type, e.PR, e.PRURL = workflow.PRMerged, ended.Number, ended.URL

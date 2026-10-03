@@ -125,6 +125,10 @@ func (s State) find(id string) (WorkItem, int) {
 	return WorkItem{}, -1
 }
 
+// Active reports whether w is an Owned Issue not yet Done, the only kind
+// of Work Item GitHub observations still change.
+func (w WorkItem) Active() bool { return w.Kind == KindOwnedIssue && w.State != Done }
+
 func (w WorkItem) clone() WorkItem {
 	w.ProcessedEventIDs = slices.Clone(w.ProcessedEventIDs)
 	if w.Pause != nil {
@@ -269,7 +273,7 @@ func reduceAssigned(state State, event Event) []Action {
 
 func reduceIneligible(state State, event Event) []Action {
 	w, i := state.find(event.Ref())
-	if i < 0 || w.Kind != KindOwnedIssue || w.State == Done || (w.Pause != nil && w.Pause.NotEligible) {
+	if i < 0 || !w.Active() || (w.Pause != nil && w.Pause.NotEligible) {
 		return nil
 	}
 	w = paused(w, event.ObservedAt)
@@ -282,7 +286,7 @@ func reduceIneligible(state State, event Event) []Action {
 // level-triggered, so an item Woken after its PR was linked still moves.
 func reducePRDiscovered(state State, event Event) []Action {
 	w, i := state.find(event.Ref())
-	if i < 0 || w.Kind != KindOwnedIssue || w.State == Done {
+	if i < 0 || !w.Active() {
 		return nil
 	}
 	changed := w.PR != event.PR || w.PRURL != event.PRURL
@@ -305,7 +309,7 @@ func reducePRDiscovered(state State, event Event) []Action {
 // any Held Wake: it is never Woken again.
 func reduceDone(state State, event Event) []Action {
 	w, i := state.find(event.Ref())
-	if i < 0 || w.Kind != KindOwnedIssue || w.State == Done {
+	if i < 0 || !w.Active() {
 		return nil
 	}
 	if event.PR != 0 {
@@ -350,7 +354,7 @@ func Ineligible(state State, assigned []Event, at time.Time) []Event {
 	}
 	var events []Event
 	for _, w := range state.Items {
-		if w.Kind == KindOwnedIssue && w.State != Done && !seen[w.ID] {
+		if w.Active() && !seen[w.ID] {
 			events = append(events, Event{Type: IssueIneligible, Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL, ObservedAt: at})
 		}
 	}
