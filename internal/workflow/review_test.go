@@ -95,7 +95,7 @@ func TestAReviewRequestIsNotTouchedByOwnedIssueObservations(t *testing.T) {
 	if got := Ineligible(st, nil, t1); got != nil {
 		t.Errorf("Ineligible() = %+v; a Review Request is never Eligible or not", got)
 	}
-	if got := st.Items[0].WatchesCI(); got {
-		t.Errorf("WatchesCI() = true; CI on a Review Request never Wakes ci-failure")
+	if got := st.Items[0].WatchesPR(); got {
+		t.Errorf("WatchesPR() = true; a Review Request's PR never Wakes ci-failure or feedback")
 	}
 }

@@ -6,6 +6,8 @@
 // appends every invocation to calls.jsonl there.
 package testharness
 
+import "time"
+
 const (
 	FixtureFile = "fixture.json"
 	CallsFile   = "calls.jsonl"
@@ -99,6 +101,30 @@ type PullRequest struct {
 	// HeadSHA is the PR's head commit and Checks the checks on it.
 	HeadSHA string  `json:"headSha,omitempty"`
 	Checks  []Check `json:"checks,omitempty"`
+	// Reviews and Comments are the PR's reviews and standalone comments,
+	// oldest first.
+	Reviews  []Review  `json:"reviews,omitempty"`
+	Comments []Comment `json:"comments,omitempty"`
+}
+
+// Review is a review on a PR, as `gh pr view --json reviews` reports it.
+type Review struct {
+	ID                string    `json:"id"`
+	Author            string    `json:"author"`
+	AuthorAssociation string    `json:"authorAssociation"`
+	Body              string    `json:"body"`
+	State             string    `json:"state"`
+	SubmittedAt       time.Time `json:"submittedAt"`
+}
+
+// Comment is a standalone comment on a PR, as `gh pr view --json comments`
+// reports it.
+type Comment struct {
+	ID                string    `json:"id"`
+	Author            string    `json:"author"`
+	AuthorAssociation string    `json:"authorAssociation"`
+	Body              string    `json:"body"`
+	CreatedAt         time.Time `json:"createdAt"`
 }
 
 // Check is a check run on a PR's head commit, as statusCheckRollup reports

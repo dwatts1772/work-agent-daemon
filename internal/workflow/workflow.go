@@ -37,10 +37,14 @@ const (
 	// ReadyToMerge is an Owned Issue whose PR has green, Settled CI and no
 	// actionable feedback; the Operator merges it.
 	ReadyToMerge ItemState = "READY_TO_MERGE"
-	// WaitingForCI is an Owned Issue with an open PR linked.
+	// WaitingForCI is an Owned Issue with an open PR linked, whose head's
+	// CI has not Settled green.
 	WaitingForCI ItemState = "WAITING_FOR_CI"
-	// AddressingFeedback is an Owned Issue Woken for a CI failure on its
-	// PR's head, until the head SHA changes.
+	// WaitingForReview is an Owned Issue whose PR has green, Settled CI but
+	// outstanding feedback or no approval yet.
+	WaitingForReview ItemState = "WAITING_FOR_REVIEW"
+	// AddressingFeedback is an Owned Issue Woken for feedback or a CI
+	// failure on its PR, until the head SHA changes.
 	AddressingFeedback ItemState = "ADDRESSING_FEEDBACK"
 	// Reviewing is a Review Request Woken in its Review Workspace to review
 	// the PR's head.
@@ -81,9 +85,16 @@ const (
 	// WakeCIFailure Wakes Claude because CI on its PR's head Settled with a
 	// failure.
 	WakeCIFailure WakeReason = "ci-failure"
+	// WakeFeedback Wakes Claude because its PR received a review, or a batch
+	// of comments that has gone quiet.
+	WakeFeedback WakeReason = "feedback"
 	// WakeReview Wakes Claude to review a Review Request's PR.
 	WakeReview WakeReason = "review"
 )
+
+// onPR reports whether a Wake for r is about the linked PR rather than the
+// issue.
+func (r WakeReason) onPR() bool { return r == WakeCIFailure || r == WakeFeedback }
 
 // HoldReason is why a Wake is Held.
 type HoldReason string
@@ -160,10 +171,20 @@ func (s State) find(id string) (WorkItem, int) {
 // of Work Item GitHub observations still change.
 func (w WorkItem) Active() bool { return w.Kind == KindOwnedIssue && w.State != Done }
 
-// WatchesCI reports whether CI on w's linked PR can still change w: it has
-// a PR, is not Paused, and is waiting for CI or addressing a failure.
-func (w WorkItem) WatchesCI() bool {
-	return w.Active() && w.PR != 0 && (w.State == WaitingForCI || w.State == AddressingFeedback)
+// WatchesPR reports whether its linked PR's head, CI and feedback can still
+// change w: it has a PR and is in one of the open-PR states, so neither
+// Paused nor Done.
+func (w WorkItem) WatchesPR() bool {
+	return w.Active() && w.PR != 0 && w.onPR()
+}
+
+// onPR reports whether w is in one of the states of an open, linked PR.
+func (w WorkItem) onPR() bool {
+	switch w.State {
+	case WaitingForCI, WaitingForReview, AddressingFeedback, ReadyToMerge:
+		return true
+	}
+	return false
 }
 
 func (w WorkItem) clone() WorkItem {
@@ -209,14 +230,34 @@ const (
 	// PRClosed is the observation that the PR for a tracked Owned Issue was
 	// closed without merging.
 	PRClosed EventType = "PR_CLOSED"
-	// CIObserved is the observation of the CI state of the head commit of
-	// a tracked Owned Issue's linked PR.
-	CIObserved EventType = "CI_OBSERVED"
+	// PRObserved is the observation of a tracked Owned Issue's linked PR:
+	// its head commit, the CI state of that head, and its feedback.
+	PRObserved EventType = "PR_OBSERVED"
 	// ReviewRequested is the observation of an open PR in an allowlisted
 	// repo on which the Operator is explicitly requested as a reviewer, with
 	// the CI state of its head commit.
 	ReviewRequested EventType = "REVIEW_REQUESTED"
 )
+
+// Feedback is one review or standalone comment on a PR that counts as
+// feedback: from an author allowed to give it, with something to act on.
+type Feedback struct {
+	// ID is GitHub's ID of the review or comment.
+	ID string
+	// Review is set for a submitted review, unset for a standalone comment.
+	Review bool
+	// At is when the review was submitted or the comment created.
+	At time.Time
+}
+
+// marker is the feedback's dedupe marker on PR pr of repo.
+func (f Feedback) marker(repo string, pr int) string {
+	kind := "comment"
+	if f.Review {
+		kind = "review"
+	}
+	return repo + "#" + strconv.Itoa(pr) + ":" + kind + ":" + f.ID
+}
 
 // Event is one observation from a Tick.
 type Event struct {
@@ -232,6 +273,14 @@ type Event struct {
 	HeadSHA string
 	Settled bool
 	Failed  bool
+	// Feedback is every review and comment on the PR that counts as
+	// feedback; Approved is whether the PR is approved with no change
+	// requested.
+	Feedback []Feedback
+	Approved bool
+	// QuietPeriod is how long comments must go quiet before the daemon Wakes
+	// the Work Item for them.
+	QuietPeriod time.Duration
 	// Reviewer is the requested reviewer of a ReviewRequested event.
 	Reviewer   string
 	ObservedAt time.Time
@@ -252,7 +301,7 @@ func (e Event) Marker() string {
 	switch e.Type {
 	case IssueAssigned:
 		return e.Ref() + ":assigned"
-	case CIObserved:
+	case PRObserved:
 		return e.Repo + "#" + strconv.Itoa(e.PR) + ":ci:" + e.HeadSHA
 	case ReviewRequested:
 		return e.Ref() + ":review-request:" + e.Reviewer + ":" + e.HeadSHA
@@ -284,6 +333,11 @@ const (
 	HeadChanged ActionType = "HEAD_CHANGED"
 	// CIFailed records Item with a ci-failure Wake due.
 	CIFailed ActionType = "CI_FAILED"
+	// FeedbackDue records Item with a feedback Wake due.
+	FeedbackDue ActionType = "FEEDBACK_DUE"
+	// CIPassed records Item, its head's CI Settled green, now waiting for
+	// review or ready to merge.
+	CIPassed ActionType = "CI_PASSED"
 )
 
 // Action is something the reducer decided should happen to Item; for every
@@ -310,8 +364,8 @@ func Reduce(state State, event Event) []Action {
 		return reducePRDiscovered(state, event)
 	case PRMerged, PRClosed, IssueClosed:
 		return reduceDone(state, event)
-	case CIObserved:
-		return reduceCI(state, event)
+	case PRObserved:
+		return reducePR(state, event)
 	case ReviewRequested:
 		return reduceReviewRequested(state, event)
 	}
@@ -344,30 +398,93 @@ func reduceReviewRequested(state State, event Event) []Action {
 	}}}
 }
 
-// reduceCI records the linked PR's head SHA and, the first time CI on a head
-// Settles with a failure, decides a ci-failure Wake. A new head moves the
-// item back to WaitingForCI and drops any Wake decided for the old head,
-// which the new commit supersedes.
-func reduceCI(state State, event Event) []Action {
+// reducePR records the linked PR's head SHA and decides what its CI and
+// feedback mean, with at most one Wake due at a time:
+//
+//   - A new head moves the item back to WaitingForCI and drops a ci-failure
+//     Wake decided for the old head, which the new commit supersedes; a
+//     feedback Wake not yet carried out stays due.
+//   - The first time CI on a head Settles with a failure, a ci-failure Wake,
+//     and an item not already addressing feedback goes back to WaitingForCI.
+//     While another Wake is due the failure waits for a later Tick.
+//   - New feedback holding a submitted review, or new comments whose newest
+//     is a Quiet Period old, one feedback Wake for the whole batch.
+//   - CI Settled green moves the item to ReadyToMerge when the PR is
+//     approved with no feedback outstanding, otherwise to WaitingForReview.
+func reducePR(state State, event Event) []Action {
 	w, i := state.find(event.Ref())
-	if i < 0 || !w.WatchesCI() || w.PR != event.PR || event.HeadSHA == "" {
+	if i < 0 || !w.WatchesPR() || w.PR != event.PR || event.HeadSHA == "" {
 		return nil
 	}
-	var actions []Action
+	var last ActionType
 	if w.HeadSHA != event.HeadSHA {
 		w.HeadSHA = event.HeadSHA
 		w.State = WaitingForCI
-		w.DueWake, w.HeldWake = "", nil
-		w.UpdatedAt = event.ObservedAt
-		actions = []Action{{Type: HeadChanged, Item: w}}
+		if w.DueWake == WakeCIFailure {
+			w.DueWake, w.HeldWake = "", nil
+		}
+		last = HeadChanged
 	}
-	if event.Settled && event.Failed && w.State == WaitingForCI && !slices.Contains(w.ProcessedEventIDs, event.Marker()) {
+	if event.Settled && event.Failed && w.DueWake == "" && !slices.Contains(w.ProcessedEventIDs, event.Marker()) {
 		w.ProcessedEventIDs = append(w.ProcessedEventIDs, event.Marker())
 		w.DueWake = WakeCIFailure
-		w.UpdatedAt = event.ObservedAt
-		actions = []Action{{Type: CIFailed, Item: w}}
+		if w.State != AddressingFeedback {
+			w.State = WaitingForCI
+		}
+		last = CIFailed
 	}
-	return actions
+	fresh := w.newFeedback(event.Feedback)
+	if len(fresh) > 0 && w.DueWake == "" && batchReady(fresh, event.ObservedAt, event.QuietPeriod) {
+		for _, f := range fresh {
+			w.ProcessedEventIDs = append(w.ProcessedEventIDs, f.marker(w.Repo, w.PR))
+		}
+		w.DueWake, fresh = WakeFeedback, nil
+		last = FeedbackDue
+	}
+	if event.Settled && !event.Failed && w.State != AddressingFeedback {
+		target := WaitingForReview
+		if event.Approved && w.DueWake == "" && len(fresh) == 0 {
+			target = ReadyToMerge
+		}
+		if w.State != target {
+			w.State = target
+			if last == "" {
+				last = CIPassed
+			}
+		}
+	}
+	if last == "" {
+		return nil
+	}
+	w.UpdatedAt = event.ObservedAt
+	return []Action{{Type: last, Item: w}}
+}
+
+// newFeedback returns the feedback not yet acted on.
+func (w WorkItem) newFeedback(feedback []Feedback) []Feedback {
+	var fresh []Feedback
+	for _, f := range feedback {
+		if !slices.Contains(w.ProcessedEventIDs, f.marker(w.Repo, w.PR)) {
+			fresh = append(fresh, f)
+		}
+	}
+	return fresh
+}
+
+// batchReady reports whether the daemon Wakes the Work Item for a batch of
+// new feedback now: it holds a submitted review, or its newest comment is a
+// Quiet Period old.
+func batchReady(batch []Feedback, now time.Time, quiet time.Duration) bool {
+	var newest time.Time
+	for _, f := range batch {
+		if f.Review {
+			return true
+		}
+		if f.At.After(newest) {
+			newest = f.At
+		}
+	}
+	return !now.Before(newest.Add(quiet))
 }
 
 func reduceAssigned(state State, event Event) []Action {
@@ -492,7 +609,7 @@ func Apply(state State, actions []Action) State {
 		switch a.Type {
 		case CreateOwnedIssue, CreateReviewRequest:
 			next.Items = append(next.Items, a.Item)
-		case PauseItem, ResumeItem, LinkPR, MarkDone, HeadChanged, CIFailed:
+		case PauseItem, ResumeItem, LinkPR, MarkDone, HeadChanged, CIFailed, FeedbackDue, CIPassed:
 			if _, i := next.find(a.Item.ID); i >= 0 {
 				next.Items[i] = a.Item
 			}
@@ -555,9 +672,9 @@ func (s State) Item(id string) (WorkItem, bool) {
 
 // PendingActions decides the Workspace actions Work Items still need: one
 // in PendingWorkspace has its Workspace created if none is recorded, then is
-// Woken; an Owned Issue waiting for CI with a Wake due is Woken. They repeat
-// on every Tick until their outcome is recorded, which is how a Held Wake is
-// retried.
+// Woken; an Owned Issue with an open PR and a Wake due is Woken. They
+// repeat on every Tick until their outcome is recorded, which is how a Held
+// Wake is retried.
 func PendingActions(state State) []Action {
 	var actions []Action
 	for _, w := range state.Items {
@@ -582,7 +699,7 @@ func WakeDue(w WorkItem) (WakeReason, bool) {
 		return "", false
 	case w.State == PendingWorkspace:
 		return WakeIssue, true
-	case w.State == WaitingForCI && w.DueWake != "":
+	case w.onPR() && w.DueWake != "":
 		return w.DueWake, true
 	}
 	return "", false
@@ -595,10 +712,10 @@ func WakePrompt(entrySkill string, reason WakeReason, ref string) string {
 }
 
 // WakeRef is the reference a Wake for reason names: the issue for an issue
-// Wake, the linked PR for a ci-failure Wake, and the Review Request's PR,
-// its ID, for a review Wake.
+// Wake, the linked PR for a ci-failure or feedback Wake, and the Review
+// Request's PR, its ID, for a review Wake.
 func (w WorkItem) WakeRef(reason WakeReason) string {
-	if reason == WakeCIFailure {
+	if reason.onPR() {
 		return w.Repo + "#" + strconv.Itoa(w.PR)
 	}
 	return w.ID
@@ -613,15 +730,15 @@ func WorkspaceCreated(state State, id string, ws workspace.Workspace, now time.T
 }
 
 // Woken records the Work Item's Wake for reason: the first Wake moves it to
-// InProgress, a ci-failure Wake to AddressingFeedback, a review Wake to
-// Reviewing.
+// InProgress, a ci-failure or feedback Wake to AddressingFeedback, a review
+// Wake to Reviewing.
 func Woken(state State, id string, reason WakeReason, now time.Time) State {
 	return update(state, id, now, func(w *WorkItem) {
 		w.State = InProgress
-		switch reason {
-		case WakeCIFailure:
+		switch {
+		case reason.onPR():
 			w.State = AddressingFeedback
-		case WakeReview:
+		case reason == WakeReview:
 			w.State = Reviewing
 		}
 		w.DueWake = ""

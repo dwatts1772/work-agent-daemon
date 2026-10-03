@@ -39,6 +39,7 @@ func newCLI(t *testing.T, fx testharness.Fixture) *cli {
 			"account":          operator,
 			"repos":            []string{"org/a", "org/b"},
 			"eligibilityLabel": "agent-ready",
+			"feedbackBots":     []string{"coderabbitai[bot]"},
 		},
 		"binaries": stubs.Paths,
 	}
