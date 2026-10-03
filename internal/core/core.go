@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -323,6 +324,10 @@ func (d *Daemon) wake(ctx context.Context, st workflow.State, item workflow.Work
 	}
 	prompt := workflow.WakePrompt(d.cfg.Claude.EntrySkill, reason, item.WakeRef(reason))
 	if err := d.workspaces.Wake(ctx, ws, prompt); err != nil {
+		if errors.Is(err, workspace.ErrAgentBusy) {
+			d.log.Info("Claude is busy in the Workspace; holding the Wake until a later Tick", "item", item.ID, "reason", reason)
+			return workflow.Held(st, item.ID, reason, workflow.HoldAgentWorking, time.Now().UTC())
+		}
 		return d.failed(st, item.ID, "Wake", err)
 	}
 	d.log.Info("Woken", "item", item.ID, "reason", reason, "claudeSessionId", ws.ClaudeSessionID)

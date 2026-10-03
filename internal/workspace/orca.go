@@ -244,23 +244,20 @@ var (
 // Wake hands the Workspace to Claude with prompt, keeping one conversation
 // per Workspace under the daemon-owned session ID (ADR-0002):
 //
-//   - a live Claude whose agent is idle gets the prompt sent into it;
+//   - a live Claude whose agent is idle gets the prompt sent into it, and a
+//     live Claude that is not idle makes the Wake fail with ErrAgentBusy;
 //   - otherwise, if Claude has a transcript of the session, the
 //     conversation is resumed with `claude --resume` in a new terminal;
 //   - otherwise, as on the first Wake or when the session cannot be resumed,
 //     a fresh session is started under the same ID with `claude --session-id`.
 //
-// Terminal handles are never kept; they are re-resolved on every Wake. The
-// caller holds the Wake while the agent is working.
+// Terminal handles are never kept; they are re-resolved on every Wake.
 func (o *Orca) Wake(ctx context.Context, ws Workspace, prompt string) error {
 	if !safePrompt.MatchString(prompt) {
 		return fmt.Errorf("refusing to Wake with prompt %q: it contains characters a shell could interpret", prompt)
 	}
 	if !safeSessionID.MatchString(ws.ClaudeSessionID) {
 		return fmt.Errorf("refusing to Wake: session ID %q is not a UUID", ws.ClaudeSessionID)
-	}
-	if !o.hasTranscript(ws.ClaudeSessionID) {
-		return o.startClaude(ctx, ws, fmt.Sprintf(`claude --session-id %s "%s"`, ws.ClaudeSessionID, prompt))
 	}
 	handle, err := o.liveClaude(ctx, ws)
 	if err != nil {
@@ -271,12 +268,21 @@ func (o *Orca) Wake(ctx context.Context, ws Workspace, prompt string) error {
 		if err != nil {
 			return err
 		}
-		if state == AgentIdle {
-			return o.call(ctx, nil, "terminal", "send", "--terminal", handle, "--text", prompt, "--enter")
+		if state != AgentIdle {
+			return ErrAgentBusy
 		}
+		return o.call(ctx, nil, "terminal", "send", "--terminal", handle, "--text", prompt, "--enter")
+	}
+	if !o.hasTranscript(ws.ClaudeSessionID) {
+		return o.startClaude(ctx, ws, fmt.Sprintf(`claude --session-id %s "%s"`, ws.ClaudeSessionID, prompt))
 	}
 	return o.startClaude(ctx, ws, fmt.Sprintf(`claude --resume %s "%s"`, ws.ClaudeSessionID, prompt))
 }
+
+// ErrAgentBusy is returned by Wake when Claude is live in the Workspace but
+// not idle: typing into it or starting a second Claude beside it would Wake
+// the Workspace twice concurrently, so the caller Holds the Wake.
+var ErrAgentBusy = errors.New("Claude is live in the Workspace but not idle")
 
 // startClaude runs command in a new terminal of ws.
 func (o *Orca) startClaude(ctx context.Context, ws Workspace, command string) error {
@@ -312,6 +318,12 @@ func (o *Orca) liveClaude(ctx context.Context, ws Workspace) (string, error) {
 // hasTranscript reports whether Claude keeps a transcript of session, which
 // `claude --resume` needs. Claude stores it as projects/<project>/<id>.jsonl
 // in its config directory; session IDs are UUIDs, so any project will do.
+//
+// This is how a Wake falls back to a fresh session "if resume fails"
+// (ADR-0002): the Wake command is typed into the Workspace terminal's shell,
+// whose exit status the daemon cannot observe, so a missing transcript —
+// Claude never ran in the session, or cleaned it up — is taken to mean
+// resume would fail.
 func (o *Orca) hasTranscript(session string) bool {
 	matches, _ := filepath.Glob(filepath.Join(o.claudeDir, "projects", "*", session+".jsonl"))
 	return len(matches) > 0

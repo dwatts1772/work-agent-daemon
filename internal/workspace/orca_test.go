@@ -2,6 +2,7 @@ package workspace_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -314,24 +315,40 @@ func TestAWakeIsSentIntoALiveIdleClaude(t *testing.T) {
 	}
 }
 
-func TestAWakeIsNotTypedIntoAClaudeThatIsWaitingOnTheOperator(t *testing.T) {
-	rt := running()
-	orca, stubs := newOrca(t, rt)
-	ws, err := orca.CreateForIssue(ctx, workspace.CreateInput{Repo: "org/a", Issue: 7})
-	if err != nil {
-		t.Fatal(err)
-	}
-	haveTranscript(t, stubs, ws)
-	rt.AgentStates = map[string][]string{"issue-7": {"waiting"}}
-	rt.Terminals = map[string][]testharness.OrcaTerminal{"issue-7": {{Handle: "term_claude", AgentIdentity: "claude"}}}
-	stubs.SetFixture(t, testharness.Fixture{Orca: rt})
+// A live Claude that is not idle is busy: the Wake neither types into it
+// nor starts a second Claude beside it, with or without a transcript.
+func TestAWakeIntoALiveClaudeThatIsNotIdleIsBusy(t *testing.T) {
+	for _, tc := range []struct {
+		agents     []string
+		transcript bool
+	}{
+		{[]string{"waiting"}, true},
+		{[]string{"working"}, true},
+		{[]string{"waiting"}, false},
+	} {
+		rt := running()
+		orca, stubs := newOrca(t, rt)
+		ws, err := orca.CreateForIssue(ctx, workspace.CreateInput{Repo: "org/a", Issue: 7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.transcript {
+			haveTranscript(t, stubs, ws)
+		}
+		rt.AgentStates = map[string][]string{"issue-7": tc.agents}
+		rt.Terminals = map[string][]testharness.OrcaTerminal{"issue-7": {{Handle: "term_claude", AgentIdentity: "claude"}}}
+		stubs.SetFixture(t, testharness.Fixture{Orca: rt})
 
-	if err := orca.Wake(ctx, ws, "/work-item ci-failure org/a#60"); err != nil {
-		t.Fatal(err)
-	}
+		err = orca.Wake(ctx, ws, "/work-item ci-failure org/a#60")
 
-	if got := lastOrcaCall(t, stubs); !slices.Contains(got, `claude --resume `+ws.ClaudeSessionID+` "/work-item ci-failure org/a#60"`) {
-		t.Errorf("orca %q; want the conversation resumed in a new terminal", got)
+		if !errors.Is(err, workspace.ErrAgentBusy) {
+			t.Errorf("%v, transcript %v: Wake() = %v, want ErrAgentBusy", tc.agents, tc.transcript, err)
+		}
+		for _, c := range stubs.Calls(t) {
+			if c.Bin == "orca" && len(c.Args) > 1 && c.Args[0] == "terminal" && (c.Args[1] == "create" || c.Args[1] == "send") {
+				t.Errorf("%v, transcript %v: orca %q into a busy Claude", tc.agents, tc.transcript, c.Args)
+			}
+		}
 	}
 }
 

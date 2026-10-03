@@ -176,3 +176,19 @@ func TestACIFailureWakeIsHeldWhileTheAgentIsWorkingAcrossRestarts(t *testing.T) 
 		t.Errorf("org/a#1 = %s with HeldWake %+v; want ADDRESSING_FEEDBACK, released", got.State, got.HeldWake)
 	}
 }
+
+func TestACIFailureWakeIsHeldWhileClaudeIsWaitingOnTheOperator(t *testing.T) {
+	c := newCLI(t, withCI("aaa", running))
+	c.mustTick(t)
+	c.mustTick(t)
+
+	c.stubs.SetFixture(t, withAgent(withCI("aaa", failed), []string{"waiting"}, testharness.OrcaTerminal{Handle: "term_claude", AgentIdentity: "claude"}))
+	c.mustTick(t)
+
+	if w := ciFailureWakes(t, c); len(w) != 0 {
+		t.Errorf("Woke a Claude waiting on the Operator: %q", w)
+	}
+	if got := c.item(t, "org/a#1"); got.HeldWake == nil || got.HeldWake.Reason != workflow.WakeCIFailure || got.State != workflow.WaitingForCI {
+		t.Errorf("org/a#1 = %s with HeldWake %+v, want the ci-failure Wake Held", got.State, got.HeldWake)
+	}
+}
