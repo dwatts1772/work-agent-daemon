@@ -11,7 +11,7 @@ const (
 	CallsFile   = "calls.jsonl"
 )
 
-// Fixture is the GitHub world the stub gh simulates.
+// Fixture is the world the stubs simulate.
 type Fixture struct {
 	// Tokens maps an account to the token `gh auth token --user <account>`
 	// prints. Accounts missing here are not logged in.
@@ -26,7 +26,19 @@ type Fixture struct {
 	// EchoTokenOnError makes failing gh calls print GH_TOKEN to stderr, as
 	// a hostile stand-in for any tool that leaks its credentials in errors.
 	EchoTokenOnError bool `json:"echoTokenOnError"`
+	// Orca is how the stub orca answers `orca status --json`; the zero
+	// value is a reachable runtime.
+	Orca OrcaMode `json:"orca"`
 }
+
+// OrcaMode is a state of the stub Orca.
+type OrcaMode string
+
+const (
+	OrcaReachable   OrcaMode = ""
+	OrcaUnreachable OrcaMode = "unreachable" // the app is not running
+	OrcaFailing     OrcaMode = "failing"     // the CLI itself errors
+)
 
 type Issue struct {
 	Number    int      `json:"number"`

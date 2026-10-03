@@ -92,7 +92,7 @@ func runTick(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer store.Close()
-	logFile, err := openLog(stateDir)
+	logFile, err := logging.OpenFile(stateDir)
 	if err != nil {
 		fmt.Fprintln(stderr, "work-agent:", err)
 		return 1
@@ -130,13 +130,4 @@ func printResult(w io.Writer, res core.Result) {
 	default:
 		fmt.Fprintf(w, "No changes: %d Eligible issues, all already Owned Issues.\n", res.Eligible)
 	}
-}
-
-// openLog opens the JSONL log in the logs/ directory of the state directory.
-func openLog(stateDir string) (*os.File, error) {
-	dir := filepath.Join(stateDir, "logs")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
-	return os.OpenFile(filepath.Join(dir, "work-agent.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 }

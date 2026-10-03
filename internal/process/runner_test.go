@@ -21,7 +21,7 @@ func newRunner(t *testing.T) (*process.Runner, *testharness.Stubs) {
 func TestRunExecutesTheConfiguredBinary(t *testing.T) {
 	r, stubs := newRunner(t)
 
-	out, err := r.Run(context.Background(), "orca", []string{"status", "--json"})
+	out, err := r.Run(context.Background(), "orca", []string{"worktree", "ps", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestRunExecutesTheConfiguredBinary(t *testing.T) {
 		t.Errorf("stdout = %q", out)
 	}
 	calls := stubs.Calls(t)
-	if len(calls) != 1 || calls[0].Bin != "orca" || strings.Join(calls[0].Args, " ") != "status --json" {
+	if len(calls) != 1 || calls[0].Bin != "orca" || strings.Join(calls[0].Args, " ") != "worktree ps --json" {
 		t.Errorf("calls = %+v", calls)
 	}
 }

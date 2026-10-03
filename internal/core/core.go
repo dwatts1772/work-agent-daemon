@@ -13,6 +13,7 @@ import (
 	"github.com/dwatts1772/work-agent-daemon/internal/process"
 	"github.com/dwatts1772/work-agent-daemon/internal/state"
 	"github.com/dwatts1772/work-agent-daemon/internal/workflow"
+	"github.com/dwatts1772/work-agent-daemon/internal/workspace"
 )
 
 // Daemon is a started daemon whose GitHub access is verified to act as the
@@ -20,6 +21,7 @@ import (
 type Daemon struct {
 	cfg    config.Config
 	github *github.Client
+	orca   *workspace.Orca
 	log    *logging.Logger
 }
 
@@ -36,8 +38,12 @@ func Start(ctx context.Context, cfg config.Config, log *logging.Logger, searchDi
 		return nil, err
 	}
 	log.Info("operator verified", "account", cfg.GitHub.Account)
-	return &Daemon{cfg: cfg, github: gh, log: log}, nil
+	return &Daemon{cfg: cfg, github: gh, orca: workspace.NewOrca(runner), log: log}, nil
 }
+
+// OrcaAvailable reports whether an Orca runtime is reachable. It is a
+// signal read each Tick, never stored (ADR-0001).
+func (d *Daemon) OrcaAvailable(ctx context.Context) bool { return d.orca.Available(ctx) }
 
 // Result is what one Tick observed and decided.
 type Result struct {
