@@ -27,7 +27,13 @@ type Loop struct {
 	log      *logging.Logger
 	onStatus func(Status)
 	now      chan struct{}
-	pauseAll chan chan error
+	commands chan command
+}
+
+// command is an Operator command waiting for the Loop to run it.
+type command struct {
+	run   func(*state.Store) error
+	reply chan error
 }
 
 // NewLoop returns a Loop that reports the overall status to onStatus after
@@ -40,7 +46,7 @@ func NewLoop(stateDir string, interval time.Duration, ticker Ticker, log *loggin
 		log:      log,
 		onStatus: onStatus,
 		now:      make(chan struct{}, 1),
-		pauseAll: make(chan chan error),
+		commands: make(chan command),
 	}
 }
 
@@ -56,14 +62,21 @@ func (l *Loop) TickNow() {
 // PauseAll Pauses every Work Item by the Operator, between Ticks and under
 // the lock. It fails with state.ErrLocked while the CLI holds the lock.
 func (l *Loop) PauseAll(ctx context.Context) error {
-	reply := make(chan error, 1)
+	return l.Do(ctx, l.pauseEverything)
+}
+
+// Do runs an Operator command between Ticks, holding the lock on the state
+// directory for it. It fails with state.ErrLocked, without running it, while
+// the CLI holds the lock.
+func (l *Loop) Do(ctx context.Context, run func(*state.Store) error) error {
+	c := command{run: run, reply: make(chan error, 1)}
 	select {
-	case l.pauseAll <- reply:
+	case l.commands <- c:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 	select {
-	case err := <-reply:
+	case err := <-c.reply:
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
@@ -79,8 +92,8 @@ func (l *Loop) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case reply := <-l.pauseAll:
-			reply <- l.pauseEverything()
+		case c := <-l.commands:
+			c.reply <- l.locked(c.run)
 			continue
 		case <-timer.C:
 		case <-l.now:
@@ -118,12 +131,17 @@ func (l *Loop) tick(ctx context.Context) {
 	l.onStatus(OverallStatus(signals))
 }
 
-func (l *Loop) pauseEverything() error {
+// locked runs run holding the lock on the state directory.
+func (l *Loop) locked(run func(*state.Store) error) error {
 	store, err := state.Open(l.stateDir)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	return run(store)
+}
+
+func (l *Loop) pauseEverything(store *state.Store) error {
 	current, err := store.Load()
 	if err != nil {
 		return err

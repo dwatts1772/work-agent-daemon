@@ -18,7 +18,11 @@ import (
 // Kind distinguishes Owned Issues from Review Requests.
 type Kind string
 
-const KindOwnedIssue Kind = "OWNED_ISSUE"
+const (
+	KindOwnedIssue Kind = "OWNED_ISSUE"
+	// KindReviewRequest is a Review Request; none are tracked yet.
+	KindReviewRequest Kind = "REVIEW_REQUEST"
+)
 
 // ItemState is a Work Item's state. It is derived only from GitHub
 // observations plus the daemon's own records, such as whether a Workspace

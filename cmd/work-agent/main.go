@@ -21,7 +21,8 @@ const usage = `usage:
   work-agent list [--config path]
   work-agent inspect <owner/name>#<n> [--config path]
   work-agent pause <owner/name>#<n> [--config path]
-  work-agent resume <owner/name>#<n> [--config path]`
+  work-agent resume <owner/name>#<n> [--config path]
+  work-agent wake <owner/name>#<n> [--config path]`
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -37,7 +38,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runTick(args[1:], stdout, stderr)
 	case "list":
 		return runList(args[1:], stdout, stderr)
-	case "inspect", "pause", "resume":
+	case "inspect", "pause", "resume", "wake":
 		return runItem(args[0], args[1:], stdout, stderr)
 	}
 	fmt.Fprintln(stderr, usage)

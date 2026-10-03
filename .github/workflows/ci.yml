@@ -35,6 +35,20 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
 
+      # The tray app embeds the status window's built frontend.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cmd/work-agent-tray/frontend/package-lock.json
+
+      - name: Build the status window frontend
+        working-directory: cmd/work-agent-tray/frontend
+        run: |
+          npm ci
+          npm run check
+          npm run build
+
       - name: go build
         run: go build ./...
 

@@ -1,10 +1,14 @@
 // Command work-agent-tray is the Wails v3 system-tray app (ADR-0004): it runs
 // the Tick loop in the background, shows the overall status in the tray and
-// delivers desktop notifications unless notify.desktop is false.
+// the Work Items in a status window, and delivers desktop notifications
+// unless notify.desktop is false.
 // It embeds the same core as the headless CLI.
 //
-// Build it as a GUI-subsystem binary on Windows:
+// Build the status window's frontend first, then the binary — as a
+// GUI-subsystem binary on Windows:
 //
+//	npm --prefix cmd/work-agent-tray/frontend ci
+//	npm --prefix cmd/work-agent-tray/frontend run build
 //	go build -ldflags -H=windowsgui ./cmd/work-agent-tray
 package main
 
@@ -113,16 +117,23 @@ func (t *tray) close() {
 // serve shows the tray icon and runs the Tick loop until the Operator quits.
 // Quitting cancels the loop and waits for any in-flight Tick to end.
 func (t *tray) serve(ctx context.Context) error {
-	var services []application.Service
+	// The loop reports statuses without ever blocking on the UI; only the
+	// latest one matters. Each report also refreshes the status window.
+	statuses := make(chan core.Status, 1)
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	var app *application.App
+	loop, window := t.statusLoop(loopCtx, statuses, func() { app.Event.Emit(tickEvent) })
+
+	services := []application.Service{application.NewService(window)}
 	notifier := newDesktop(t.cfg, t.log)
 	if notifier != nil {
 		services = append(services, application.NewService(notifier))
 		t.daemon.AddNotifier(notifier)
 	}
-	app := application.New(application.Options{
+	app = application.New(application.Options{
 		Name:        "Work Agent",
 		Description: "Watches GitHub for the Operator and Wakes Claude Code in Orca Workspaces",
-		Assets:      application.AlphaAssets,
+		Assets:      application.AssetOptions{Handler: frontendHandler(t.log)},
 		Services:    services,
 		Mac: application.MacOptions{
 			// A tray-only app: no Dock icon.
@@ -133,23 +144,31 @@ func (t *tray) serve(ctx context.Context) error {
 		},
 	})
 
+	// The status window is created hidden and only hidden again on close,
+	// so reopening it is instant and quitting stays in the tray menu.
+	statusWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:  "Work Agent",
+		Width:  1200,
+		Height: 600,
+		Hidden: true,
+		URL:    "/",
+	})
+	statusWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		statusWindow.Hide()
+		e.Cancel()
+	})
+	openWindow := func() {
+		statusWindow.Show()
+		statusWindow.Focus()
+	}
+
 	icon := app.SystemTray.New()
 	icon.SetIcon(trayIcon(core.StatusOK))
 	icon.SetTooltip("Work Agent: starting")
+	icon.OnClick(openWindow)
 
-	// The loop reports statuses without ever blocking on the UI; only the
-	// latest one matters.
-	statuses := make(chan core.Status, 1)
-	loop := core.NewLoop(t.stateDir, t.cfg.PollInterval(), t.daemon, t.log, func(s core.Status) {
-		select {
-		case <-statuses:
-		default:
-		}
-		statuses <- s
-	})
-
-	loopCtx, stopLoop := context.WithCancel(ctx)
 	menu := app.NewMenu()
+	menu.Add("Open status window").OnClick(func(*application.Context) { openWindow() })
 	menu.Add("Pause all").OnClick(func(*application.Context) {
 		go func() {
 			if err := loop.PauseAll(loopCtx); err != nil {

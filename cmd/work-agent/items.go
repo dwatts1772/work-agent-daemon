@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
-	"time"
 
+	"github.com/dwatts1772/work-agent-daemon/internal/config"
+	"github.com/dwatts1772/work-agent-daemon/internal/core"
+	"github.com/dwatts1772/work-agent-daemon/internal/logging"
+	"github.com/dwatts1772/work-agent-daemon/internal/process"
 	"github.com/dwatts1772/work-agent-daemon/internal/state"
 	"github.com/dwatts1772/work-agent-daemon/internal/workflow"
 )
@@ -42,8 +47,8 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runItem runs inspect, pause or resume on one Work Item. pause and resume
-// change only state.json; they never touch GitHub or the Workspace.
+// runItem runs inspect, pause, resume or wake on one Work Item. pause and
+// resume change only state.json; they never touch GitHub or the Workspace.
 func runItem(cmd string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || !itemRef.MatchString(args[0]) {
 		fmt.Fprintln(stderr, usage)
@@ -65,36 +70,61 @@ func runItem(cmd string, args []string, stdout, stderr io.Writer) int {
 		return inspect(stateDir, id, stdout, stderr)
 	}
 
+	// Take the lock before anything else, so the command fails fast while
+	// a Tick runs.
 	store, err := state.Open(stateDir)
 	if err != nil {
 		fmt.Fprintln(stderr, "work-agent:", err)
 		return 1
 	}
 	defer store.Close()
-	current, err := store.Load()
+
+	var w workflow.WorkItem
+	switch cmd {
+	case "pause":
+		w, err = core.Pause(store, id)
+	case "resume":
+		w, err = core.Resume(store, id)
+	case "wake":
+		return wake(store, *configPath, id, stdout, stderr)
+	}
+	return report(w, err, stdout, stderr)
+}
+
+// wake carries out the item's pending Wake now, logging like a Tick does.
+func wake(store *state.Store, configPath, id string, stdout, stderr io.Writer) int {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "work-agent:", err)
 		return 1
 	}
-	change := workflow.PauseByOperator
-	if cmd == "resume" {
-		change = workflow.ResumeByOperator
-	}
-	next, actions, found := change(current, id, time.Now().UTC())
-	if !found {
-		fmt.Fprintf(stderr, "work-agent: %s is not a tracked Work Item\n", id)
+	logFile, err := logging.OpenFile(filepath.Dir(configPath))
+	if err != nil {
+		fmt.Fprintln(stderr, "work-agent:", err)
 		return 1
 	}
-	if len(actions) > 0 {
-		if err := store.Save(next); err != nil {
-			fmt.Fprintln(stderr, "work-agent: save state:", err)
-			return 1
-		}
+	defer logFile.Close()
+	log := logging.New(stderr, logFile)
+	ctx := context.Background()
+	daemon, err := core.Start(ctx, cfg, log, process.DefaultSearchDirs())
+	if err != nil {
+		fmt.Fprintln(stderr, "work-agent: refusing to run:", log.Redact(err.Error()))
+		return 1
 	}
-	w := find(next, id)
-	fmt.Fprintf(stdout, "%s\t%s\t%s\n", w.ID, w.State, pausedBecause(w))
-	if cmd == "resume" && w.Pause != nil && w.Pause.NotEligible {
-		fmt.Fprintf(stderr, "work-agent: %s is still Paused: it is not Eligible (add the Eligibility Label and assign it to the Operator)\n", id)
+	w, err := daemon.Wake(ctx, store, id)
+	if err != nil {
+		err = errors.New(log.Redact(err.Error()))
+	}
+	return report(w, err, stdout, stderr)
+}
+
+// report prints the item's new state, if it is tracked, and any error.
+func report(w workflow.WorkItem, err error, stdout, stderr io.Writer) int {
+	if w.ID != "" {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", w.ID, w.State, pausedBecause(&w))
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "work-agent:", err)
 		return 1
 	}
 	return 0
@@ -131,14 +161,8 @@ func find(st workflow.State, id string) *workflow.WorkItem {
 
 // pausedBecause says why w is Paused, or "-" when it is not.
 func pausedBecause(w *workflow.WorkItem) string {
-	switch {
-	case w.Pause == nil:
-		return "-"
-	case w.Pause.ByOperator && w.Pause.NotEligible:
-		return "paused by Operator, not Eligible"
-	case w.Pause.ByOperator:
-		return "paused by Operator"
-	default:
-		return "not Eligible"
+	if why := core.PausedBecause(*w); why != "" {
+		return why
 	}
+	return "-"
 }
