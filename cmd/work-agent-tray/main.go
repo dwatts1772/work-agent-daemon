@@ -114,9 +114,9 @@ func (t *tray) close() {
 // Quitting cancels the loop and waits for any in-flight Tick to end.
 func (t *tray) serve(ctx context.Context) error {
 	var services []application.Service
-	notifier := newDesktop(t.cfg)
+	notifier := newDesktop(t.cfg, t.log)
 	if notifier != nil {
-		services = append(services, application.NewService(notifier.service))
+		services = append(services, application.NewService(notifier))
 		t.daemon.AddNotifier(notifier)
 	}
 	app := application.New(application.Options{
@@ -169,12 +169,7 @@ func (t *tray) serve(ctx context.Context) error {
 			return
 		}
 		if notifier != nil {
-			// macOS asks the Operator once; elsewhere this is a no-op.
-			go func() {
-				if ok, err := notifier.service.RequestNotificationAuthorization(); !ok {
-					t.log.Warn("desktop notifications not authorized", "err", err)
-				}
-			}()
+			go notifier.authorize()
 		}
 		go func() {
 			defer close(loopDone)

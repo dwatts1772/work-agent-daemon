@@ -1,6 +1,6 @@
 // Package notify defines the Notifier seam the daemon tells the Operator
 // things through. The console/JSONL notifier is always on; the tray app adds
-// native desktop notifications, and Slack can plug in later.
+// native desktop notifications.
 package notify
 
 import (
@@ -16,9 +16,6 @@ const (
 	OrcaUnavailable Kind = "orca-unavailable"
 	Paused          Kind = "paused"
 	ReadyToMerge    Kind = "ready-to-merge"
-	// ReviewFindingsReady is a Review Request whose findings await the
-	// Operator's approval.
-	ReviewFindingsReady Kind = "review-findings-ready"
 	// AgentWaiting is a Workspace whose agent is waiting on the Operator,
 	// read from Orca's live agent state.
 	AgentWaiting Kind = "agent-waiting"
@@ -56,20 +53,25 @@ func NewOnce(next Notifier) *Once {
 	return &Once{next: next, active: map[string]bool{}}
 }
 
-// Observe takes every condition that holds now and delivers the new ones. A
-// failed delivery is not retried, so it never turns into a duplicate.
-func (o *Once) Observe(current []Notification) error {
+// Observe takes every condition that holds now and delivers the new ones.
+// unknown lists conditions that could not be observed this time, such as an
+// agent's state while Orca is unavailable: they stay as they were, neither
+// cleared nor delivered. A failed delivery is not retried, so it never turns
+// into a duplicate.
+func (o *Once) Observe(current, unknown []Notification) error {
 	now := map[string]bool{}
+	for _, n := range unknown {
+		if o.active[n.Key()] {
+			now[n.Key()] = true
+		}
+	}
 	var errs []error
 	for _, n := range current {
 		key := n.Key()
-		if now[key] {
-			continue
-		}
-		now[key] = true
-		if !o.active[key] {
+		if !o.active[key] && !now[key] {
 			errs = append(errs, o.next.Notify(n))
 		}
+		now[key] = true
 	}
 	o.active = now
 	return errors.Join(errs...)
@@ -98,6 +100,6 @@ func NewLog(log *logging.Logger) Log { return Log{log: log} }
 
 // Notify logs n.
 func (l Log) Notify(n Notification) error {
-	l.log.Warn("notify", "kind", n.Kind, "item", n.Item, "title", n.Title, "body", n.Body)
+	l.log.Info("notify", "kind", n.Kind, "item", n.Item, "title", n.Title, "body", n.Body)
 	return nil
 }

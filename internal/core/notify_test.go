@@ -172,3 +172,19 @@ func TestReadyToMergeIsNotifiedOnce(t *testing.T) {
 	n.tick()
 	n.expect(notify.ReadyToMerge, "org/a#1", 1)
 }
+
+func TestAnAgentStillWaitingAfterAnOrcaOutageIsNotNotifiedAgain(t *testing.T) {
+	n := newNotified(t, testharness.Fixture{Issues: eligible(), Orca: orcaUp()})
+	n.tick()
+	n.set(func(fx *testharness.Fixture) { fx.Orca.AgentStates = map[string][]string{"issue-1": {"waiting"}} })
+	n.tick()
+
+	up := n.fx.Orca
+	n.set(func(fx *testharness.Fixture) { fx.Orca = nil })
+	n.tick()
+	n.set(func(fx *testharness.Fixture) { fx.Orca = up })
+	n.tick()
+
+	n.expect(notify.AgentWaiting, "org/a#1", 1)
+	n.expect(notify.OrcaUnavailable, "", 1)
+}

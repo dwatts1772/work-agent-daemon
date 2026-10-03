@@ -23,10 +23,11 @@ func (d *Daemon) AddNotifier(n notify.Notifier) {
 // unavailable.
 //
 // Orca is consulted only for Work Items that are not Paused, so a Tick with
-// only Paused items never touches it; until it is consulted again, Orca is
-// taken to be as it last was. If an agent state cannot be read, this Tick
-// notifies nothing rather than mistake a waiting agent for one that stopped
-// waiting, which would notify it again.
+// only Paused items never touches it. A signal that is not read this Tick —
+// Orca's availability when Orca is not consulted, an agent's state while
+// Orca is unavailable or when it cannot be read — is unknown: the condition
+// stays as it was, so a waiting agent is not notified again once Orca is
+// back.
 func (d *Daemon) notify(ctx context.Context, st workflow.State, acted, held bool) {
 	var watched []workflow.WorkItem
 	for _, w := range st.Items {
@@ -34,27 +35,32 @@ func (d *Daemon) notify(ctx context.Context, st workflow.State, acted, held bool
 			watched = append(watched, w)
 		}
 	}
+	var unknown []notify.Notification
+	available := true
 	switch {
 	case held:
-		d.orcaDown = true
+		available = false
 	case acted:
-		d.orcaDown = false
 	case len(watched) > 0:
-		available, _ := d.workspaces.Available(ctx)
-		d.orcaDown = !available
+		available, _ = d.workspaces.Available(ctx)
+	default:
+		unknown = append(unknown, orcaUnavailable())
 	}
 	agents := map[string]workspace.AgentState{}
-	if !d.orcaDown {
-		for _, w := range watched {
-			s, err := d.workspaces.AgentState(ctx, *w.Workspace)
-			if err != nil {
-				d.log.Warn("cannot read agent state; skipping notifications this Tick", "item", w.ID, "err", err)
-				return
-			}
-			agents[w.ID] = s
+	for _, w := range watched {
+		if !available {
+			unknown = append(unknown, agentWaiting(w))
+			continue
 		}
+		s, err := d.workspaces.AgentState(ctx, *w.Workspace)
+		if err != nil {
+			d.log.Warn("cannot read agent state", "item", w.ID, "err", err)
+			unknown = append(unknown, agentWaiting(w))
+			continue
+		}
+		agents[w.ID] = s
 	}
-	if err := d.once.Observe(conditions(st, !d.orcaDown, agents)); err != nil {
+	if err := d.once.Observe(conditions(st, available, agents), unknown); err != nil {
 		d.log.Warn("notification not delivered", "err", err)
 	}
 }
@@ -64,11 +70,7 @@ func (d *Daemon) notify(ctx context.Context, st workflow.State, acted, held bool
 func conditions(st workflow.State, orcaAvailable bool, agents map[string]workspace.AgentState) []notify.Notification {
 	var out []notify.Notification
 	if !orcaAvailable {
-		out = append(out, notify.Notification{
-			Kind:  notify.OrcaUnavailable,
-			Title: "Orca is unavailable",
-			Body:  "Wakes are Held until Orca is running again.",
-		})
+		out = append(out, orcaUnavailable())
 	}
 	for _, w := range st.Items {
 		switch w.State {
@@ -84,8 +86,25 @@ func conditions(st workflow.State, orcaAvailable bool, agents map[string]workspa
 			out = append(out, notify.Notification{Kind: notify.Failed, Item: w.ID, Title: "FAILED: " + w.ID, Body: w.Title + "\n" + w.LastError})
 		}
 		if agents[w.ID] == workspace.AgentWaiting {
-			out = append(out, notify.Notification{Kind: notify.AgentWaiting, Item: w.ID, Title: "Agent waiting: " + w.ID, Body: "Claude is waiting on you in the Workspace for " + w.Title + "."})
+			out = append(out, agentWaiting(w))
 		}
 	}
 	return out
+}
+
+func orcaUnavailable() notify.Notification {
+	return notify.Notification{
+		Kind:  notify.OrcaUnavailable,
+		Title: "Orca is unavailable",
+		Body:  "Wakes are Held until Orca is running again.",
+	}
+}
+
+func agentWaiting(w workflow.WorkItem) notify.Notification {
+	return notify.Notification{
+		Kind:  notify.AgentWaiting,
+		Item:  w.ID,
+		Title: "Agent waiting: " + w.ID,
+		Body:  "Claude is waiting on you in the Workspace for " + w.Title + ".",
+	}
 }

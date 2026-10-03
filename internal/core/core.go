@@ -28,8 +28,6 @@ type Daemon struct {
 	// notifiers always starts with the console/JSONL log.
 	notifiers *notify.Multi
 	once      *notify.Once
-	// orcaDown is whether Orca was unavailable when last consulted.
-	orcaDown bool
 }
 
 // Start resolves the binaries and verifies the Operator. It fails if gh
@@ -78,7 +76,8 @@ type Result struct {
 
 // Tick observes GitHub, reconciles the Work Items in store against it,
 // carries out the Workspace actions that follow, saves each outcome as it
-// happens, and notifies the Operator of what now needs their attention. The caller holds store's lock for the whole Tick.
+// happens, and notifies the Operator of what now needs their attention.
+// The caller holds store's lock for the whole Tick.
 func (d *Daemon) Tick(ctx context.Context, store *state.Store) (Result, error) {
 	current, err := store.Load()
 	if err != nil {
