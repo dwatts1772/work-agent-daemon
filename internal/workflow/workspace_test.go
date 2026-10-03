@@ -71,7 +71,7 @@ func TestWokenMovesTheOwnedIssueToInProgress(t *testing.T) {
 	item.LastError = "boom"
 	st := State{Items: []WorkItem{item}}
 
-	next := Woken(st, "org/a#1", t2)
+	next := Woken(st, "org/a#1", WakeIssue, t2)
 
 	got := next.Items[0]
 	if got.State != InProgress {

@@ -76,6 +76,9 @@ func gh(fx testharness.Fixture, args []string) {
 	case len(args) >= 2 && args[0] == "pr" && args[1] == "list":
 		currentLogin(fx)
 		prList(fx, args[2:])
+	case len(args) >= 3 && args[0] == "pr" && args[1] == "view":
+		currentLogin(fx)
+		prView(fx, args[2], args[3:])
 	default:
 		fail(2, "stub gh: unsupported command %q", args)
 	}
@@ -261,6 +264,29 @@ func prList(fx testharness.Fixture, args []string) {
 	}
 	data, _ := json.Marshal(out)
 	fmt.Println(string(data))
+}
+
+// prView reports a PR's head commit and the checks on it.
+func prView(fx testharness.Fixture, number string, args []string) {
+	fs := flag.NewFlagSet("pr view", flag.ContinueOnError)
+	repo := fs.String("repo", "", "")
+	fs.String("json", "", "")
+	if err := fs.Parse(args); err != nil {
+		fail(2, "stub gh: %v", err)
+	}
+	for _, p := range fx.PullRequests[*repo] {
+		if fmt.Sprint(p.Number) != number {
+			continue
+		}
+		rollup := []map[string]any{}
+		for _, c := range p.Checks {
+			rollup = append(rollup, map[string]any{"__typename": "CheckRun", "name": c.Name, "status": c.Status, "conclusion": c.Conclusion})
+		}
+		out, _ := json.Marshal(map[string]any{"headRefOid": p.HeadSHA, "statusCheckRollup": rollup})
+		fmt.Println(string(out))
+		return
+	}
+	fail(1, "GraphQL: Could not resolve to a PullRequest with the number of %s.", number)
 }
 
 func fail(code int, format string, a ...any) {

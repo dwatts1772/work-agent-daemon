@@ -185,3 +185,68 @@ func (c *Client) IssueClosed(ctx context.Context, repo string, number int) (bool
 	}
 	return strings.EqualFold(issue.State, "CLOSED"), nil
 }
+
+// CI is the CI state of a pull request's head commit.
+type CI struct {
+	HeadSHA string
+	// Settled is set once every check on the head has concluded; a head
+	// with no checks yet is not Settled.
+	Settled bool
+	// Failed is set when any concluded check failed.
+	Failed bool
+}
+
+// PullRequestCI reads the head commit of PR number in repo and the state of
+// the checks on it, in one call so the two always match.
+func (c *Client) PullRequestCI(ctx context.Context, repo string, number int) (CI, error) {
+	out, err := c.gh(ctx, "pr", "view", strconv.Itoa(number), "--repo", repo, "--json", "headRefOid,statusCheckRollup")
+	if err != nil {
+		return CI{}, err
+	}
+	var pr struct {
+		HeadRefOid        string  `json:"headRefOid"`
+		StatusCheckRollup []Check `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal(out, &pr); err != nil {
+		return CI{}, fmt.Errorf("parse pull request %s#%d: %w", repo, number, err)
+	}
+	settled, failed := Settle(pr.StatusCheckRollup)
+	return CI{HeadSHA: pr.HeadRefOid, Settled: settled, Failed: failed}, nil
+}
+
+// Check is one entry of a commit's status check rollup: a check run
+// (status and conclusion) or a commit status (state).
+type Check struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}
+
+// Settle decides whether checks are Settled — every check run completed and
+// no commit status pending, with at least one check — and whether any
+// concluded check failed.
+func Settle(checks []Check) (settled, failed bool) {
+	settled = len(checks) > 0
+	for _, c := range checks {
+		switch {
+		case c.Status != "": // a check run
+			if !strings.EqualFold(c.Status, "COMPLETED") {
+				settled = false
+				continue
+			}
+			switch strings.ToUpper(c.Conclusion) {
+			case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE":
+				failed = true
+			}
+		default: // a commit status
+			switch strings.ToUpper(c.State) {
+			case "FAILURE", "ERROR":
+				failed = true
+			case "SUCCESS":
+			default:
+				settled = false
+			}
+		}
+	}
+	return settled, failed
+}

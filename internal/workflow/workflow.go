@@ -36,6 +36,9 @@ const (
 	ReadyToMerge ItemState = "READY_TO_MERGE"
 	// WaitingForCI is an Owned Issue with an open PR linked.
 	WaitingForCI ItemState = "WAITING_FOR_CI"
+	// AddressingFeedback is an Owned Issue Woken for a CI failure on its
+	// PR's head, until the head SHA changes.
+	AddressingFeedback ItemState = "ADDRESSING_FEEDBACK"
 	// Done is a Work Item whose PR was merged or closed, or whose issue was
 	// closed. It is final: the daemon never Wakes it or changes it again.
 	Done ItemState = "DONE"
@@ -66,14 +69,24 @@ const MaxActionFailures = 3
 // WakeReason is why a Wake happened.
 type WakeReason string
 
-// WakeIssue Wakes Claude to start work on an Owned Issue.
-const WakeIssue WakeReason = "issue"
+const (
+	// WakeIssue Wakes Claude to start work on an Owned Issue.
+	WakeIssue WakeReason = "issue"
+	// WakeCIFailure Wakes Claude because CI on its PR's head Settled with a
+	// failure.
+	WakeCIFailure WakeReason = "ci-failure"
+)
 
 // HoldReason is why a Wake is Held.
 type HoldReason string
 
-// HoldBackendUnavailable holds a Wake while Orca is unreachable.
-const HoldBackendUnavailable HoldReason = "backend-unavailable"
+const (
+	// HoldBackendUnavailable holds a Wake while Orca is unreachable.
+	HoldBackendUnavailable HoldReason = "backend-unavailable"
+	// HoldAgentWorking holds a Wake while Orca reports the Workspace's agent
+	// as working.
+	HoldAgentWorking HoldReason = "agent-working"
+)
 
 // HeldWake is a Wake the daemon decided on but deferred; it is retried on a
 // later Tick, never dropped.
@@ -98,11 +111,16 @@ type WorkItem struct {
 	// PR is the number of the pull request linked to the Work Item, if any.
 	PR    int    `json:"pr,omitempty"`
 	PRURL string `json:"prUrl,omitempty"`
+	// HeadSHA is the linked PR's head commit as last observed.
+	HeadSHA string `json:"headSha,omitempty"`
 	// Pause is set while the item is Paused.
 	Pause *Pause `json:"pause,omitempty"`
 	// ProcessedEventIDs are the dedupe markers of every event already
 	// applied to this Work Item.
 	ProcessedEventIDs []string `json:"processedEventIds"`
+	// DueWake is the reason for a Wake the daemon has decided on but not
+	// yet carried out, if any; it is retried every Tick until it happens.
+	DueWake WakeReason `json:"dueWake,omitempty"`
 	// HeldWake is the Wake waiting for a later Tick, if any.
 	HeldWake   *HeldWake  `json:"heldWake,omitempty"`
 	LastWakeAt *time.Time `json:"lastWakeAt,omitempty"`
@@ -131,6 +149,12 @@ func (s State) find(id string) (WorkItem, int) {
 // Active reports whether w is an Owned Issue not yet Done, the only kind
 // of Work Item GitHub observations still change.
 func (w WorkItem) Active() bool { return w.Kind == KindOwnedIssue && w.State != Done }
+
+// WatchesCI reports whether CI on w's linked PR can still change w: it has
+// a PR, is not Paused, and is waiting for CI or addressing a failure.
+func (w WorkItem) WatchesCI() bool {
+	return w.Active() && w.PR != 0 && (w.State == WaitingForCI || w.State == AddressingFeedback)
+}
 
 func (w WorkItem) clone() WorkItem {
 	w.ProcessedEventIDs = slices.Clone(w.ProcessedEventIDs)
@@ -175,6 +199,9 @@ const (
 	// PRClosed is the observation that the PR for a tracked Owned Issue was
 	// closed without merging.
 	PRClosed EventType = "PR_CLOSED"
+	// CIObserved is the observation of the CI state of the head commit of
+	// a tracked Owned Issue's linked PR.
+	CIObserved EventType = "CI_OBSERVED"
 )
 
 // Event is one observation from a Tick.
@@ -185,8 +212,12 @@ type Event struct {
 	Title string
 	URL   string
 	// PR and PRURL identify the pull request of a PR event.
-	PR         int
-	PRURL      string
+	PR    int
+	PRURL string
+	// HeadSHA is the PR's head commit; Settled and Failed are its CI state.
+	HeadSHA    string
+	Settled    bool
+	Failed     bool
 	ObservedAt time.Time
 }
 
@@ -199,6 +230,8 @@ func (e Event) Marker() string {
 	switch e.Type {
 	case IssueAssigned:
 		return e.Ref() + ":assigned"
+	case CIObserved:
+		return e.Repo + "#" + strconv.Itoa(e.PR) + ":ci:" + e.HeadSHA
 	}
 	return e.Ref() + ":" + string(e.Type)
 }
@@ -221,6 +254,10 @@ const (
 	LinkPR ActionType = "LINK_PR"
 	// MarkDone records Item, now Done.
 	MarkDone ActionType = "DONE"
+	// HeadChanged records Item with its PR's new head SHA.
+	HeadChanged ActionType = "HEAD_CHANGED"
+	// CIFailed records Item with a ci-failure Wake due.
+	CIFailed ActionType = "CI_FAILED"
 )
 
 // Action is something the reducer decided should happen to Item; for every
@@ -246,8 +283,36 @@ func Reduce(state State, event Event) []Action {
 		return reducePRDiscovered(state, event)
 	case PRMerged, PRClosed, IssueClosed:
 		return reduceDone(state, event)
+	case CIObserved:
+		return reduceCI(state, event)
 	}
 	return nil
+}
+
+// reduceCI records the linked PR's head SHA and, the first time CI on a head
+// Settles with a failure, decides a ci-failure Wake. A new head moves the
+// item back to WaitingForCI and drops any Wake decided for the old head,
+// which the new commit supersedes.
+func reduceCI(state State, event Event) []Action {
+	w, i := state.find(event.Ref())
+	if i < 0 || !w.WatchesCI() || w.PR != event.PR || event.HeadSHA == "" {
+		return nil
+	}
+	var actions []Action
+	if w.HeadSHA != event.HeadSHA {
+		w.HeadSHA = event.HeadSHA
+		w.State = WaitingForCI
+		w.DueWake, w.HeldWake = "", nil
+		w.UpdatedAt = event.ObservedAt
+		actions = []Action{{Type: HeadChanged, Item: w}}
+	}
+	if event.Settled && event.Failed && w.State == WaitingForCI && !slices.Contains(w.ProcessedEventIDs, event.Marker()) {
+		w.ProcessedEventIDs = append(w.ProcessedEventIDs, event.Marker())
+		w.DueWake = WakeCIFailure
+		w.UpdatedAt = event.ObservedAt
+		actions = []Action{{Type: CIFailed, Item: w}}
+	}
+	return actions
 }
 
 func reduceAssigned(state State, event Event) []Action {
@@ -372,7 +437,7 @@ func Apply(state State, actions []Action) State {
 		switch a.Type {
 		case CreateOwnedIssue:
 			next.Items = append(next.Items, a.Item)
-		case PauseItem, ResumeItem, LinkPR, MarkDone:
+		case PauseItem, ResumeItem, LinkPR, MarkDone, HeadChanged, CIFailed:
 			if _, i := next.find(a.Item.ID); i >= 0 {
 				next.Items[i] = a.Item
 			}
@@ -433,28 +498,51 @@ func (s State) Item(id string) (WorkItem, bool) {
 	return w, i >= 0
 }
 
-// PendingActions decides the Workspace actions every Owned Issue in
-// PendingWorkspace still needs: create its Workspace if none is recorded,
-// then Wake Claude in it. They repeat on every Tick until their outcome is
-// recorded, which is how a Held Wake is retried.
+// PendingActions decides the Workspace actions Owned Issues still need: one
+// in PendingWorkspace has its Workspace created if none is recorded, then is
+// Woken; one waiting for CI with a Wake due is Woken. They repeat on every
+// Tick until their outcome is recorded, which is how a Held Wake is retried.
 func PendingActions(state State) []Action {
 	var actions []Action
 	for _, w := range state.Items {
-		if w.Kind != KindOwnedIssue || w.State != PendingWorkspace {
+		reason, ok := WakeDue(w)
+		if !ok {
 			continue
 		}
-		if w.Workspace == nil {
+		if w.State == PendingWorkspace && w.Workspace == nil {
 			actions = append(actions, Action{Type: CreateWorkspace, Item: w})
 		}
-		actions = append(actions, Action{Type: Wake, Item: w, Reason: WakeIssue})
+		actions = append(actions, Action{Type: Wake, Item: w, Reason: reason})
 	}
 	return actions
+}
+
+// WakeDue returns the reason w is still to be Woken, if it is.
+func WakeDue(w WorkItem) (WakeReason, bool) {
+	switch {
+	case w.Kind != KindOwnedIssue:
+		return "", false
+	case w.State == PendingWorkspace:
+		return WakeIssue, true
+	case w.State == WaitingForCI && w.DueWake != "":
+		return w.DueWake, true
+	}
+	return "", false
 }
 
 // WakePrompt is the one prompt every Wake sends: the Entry Skill, the Wake
 // Reason, and the issue or PR reference.
 func WakePrompt(entrySkill string, reason WakeReason, ref string) string {
 	return entrySkill + " " + string(reason) + " " + ref
+}
+
+// WakeRef is the reference a Wake for reason names: the issue for an issue
+// Wake, the linked PR for a ci-failure Wake.
+func (w WorkItem) WakeRef(reason WakeReason) string {
+	if reason == WakeCIFailure {
+		return w.Repo + "#" + strconv.Itoa(w.PR)
+	}
+	return w.ID
 }
 
 // WorkspaceCreated records the Work Item's newly created Workspace.
@@ -465,10 +553,15 @@ func WorkspaceCreated(state State, id string, ws workspace.Workspace, now time.T
 	})
 }
 
-// Woken records the Work Item's first Wake, moving it to InProgress.
-func Woken(state State, id string, now time.Time) State {
+// Woken records the Work Item's Wake for reason: the first Wake moves it to
+// InProgress, a ci-failure Wake to AddressingFeedback.
+func Woken(state State, id string, reason WakeReason, now time.Time) State {
 	return update(state, id, now, func(w *WorkItem) {
 		w.State = InProgress
+		if reason == WakeCIFailure {
+			w.State = AddressingFeedback
+		}
+		w.DueWake = ""
 		w.LastWakeAt = &now
 		succeeded(w)
 	})
