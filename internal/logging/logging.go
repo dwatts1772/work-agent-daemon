@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -34,6 +36,16 @@ func New(console, jsonl io.Writer) *Logger {
 		slog.NewJSONHandler(jsonl, opts),
 	)
 	return &Logger{Logger: slog.New(h), secrets: s}
+}
+
+// OpenFile opens the JSONL log in the logs/ directory of the state
+// directory, shared by the CLI and the tray app.
+func OpenFile(stateDir string) (*os.File, error) {
+	dir := filepath.Join(stateDir, "logs")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(filepath.Join(dir, "work-agent.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 }
 
 // AddSecret registers a value that must never appear in log output.

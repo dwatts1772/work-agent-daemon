@@ -8,7 +8,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// defaultPollIntervalSeconds is how often the tray app Ticks by default.
+const defaultPollIntervalSeconds = 45
 
 // Config is the subset of config.json the daemon currently uses. Unknown
 // keys are ignored so the file can carry settings for later features.
@@ -26,6 +30,17 @@ type GitHub struct {
 	// Repos is the allowlist of "owner/name" repos the daemon watches.
 	Repos            []string `json:"repos"`
 	EligibilityLabel string   `json:"eligibilityLabel"`
+	// PollIntervalSeconds is how often the tray app Ticks; 0 means the
+	// default.
+	PollIntervalSeconds int `json:"pollIntervalSeconds,omitempty"`
+}
+
+// PollInterval is how often the tray app Ticks.
+func (c Config) PollInterval() time.Duration {
+	if c.GitHub.PollIntervalSeconds == 0 {
+		return defaultPollIntervalSeconds * time.Second
+	}
+	return time.Duration(c.GitHub.PollIntervalSeconds) * time.Second
 }
 
 type Claude struct {
@@ -84,6 +99,9 @@ func (c Config) validate() error {
 	}
 	if c.GitHub.EligibilityLabel == "" {
 		return fmt.Errorf("github.eligibilityLabel is required")
+	}
+	if c.GitHub.PollIntervalSeconds < 0 {
+		return fmt.Errorf("github.pollIntervalSeconds must be positive")
 	}
 	if !entrySkillPattern.MatchString(c.Claude.EntrySkill) {
 		return fmt.Errorf("claude.entrySkill %q must be a single skill name such as %s", c.Claude.EntrySkill, DefaultEntrySkill)

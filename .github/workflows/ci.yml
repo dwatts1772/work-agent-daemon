@@ -12,10 +12,12 @@ jobs:
   build-vet-test:
     name: build-vet-test (${{ matrix.os }})
     strategy:
-      # Run every OS leg to completion so a failure on one does not hide the other.
+      # Run every OS leg to completion so a failure on one does not hide the others.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Windows and macOS are the tray app's targets; Linux keeps the core
+        # and CLI honest on a second Unix.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -24,10 +26,14 @@ jobs:
         with:
           # go.mod pins `go 1.26`; read it from there so the two cannot drift.
           go-version-file: go.mod
-          # Caches GOMODCACHE and GOCACHE. There is no go.sum (no third-party
-          # dependencies yet), so key the cache on go.mod instead.
+          # Caches GOMODCACHE and GOCACHE, keyed on go.sum.
           cache: true
-          cache-dependency-path: go.mod
+
+      # Wails v3 (the tray app) links GTK 4 and WebKitGTK 6.0 on Linux; on
+      # Windows and macOS it needs nothing beyond the toolchain.
+      - name: Install Wails Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: go build
         run: go build ./...

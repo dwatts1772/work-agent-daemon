@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, body string) string {
@@ -27,7 +28,7 @@ func TestLoadReadsOperatorReposLabelAndBinaryOverrides(t *testing.T) {
 			"account": "dwatts1772",
 			"repos": ["org/a", "org/b"],
 			"eligibilityLabel": "agent-ready",
-			"pollIntervalSeconds": 45
+			"pollIntervalSeconds": 30
 		},
 		"binaries": `+string(bins)+`,
 		"capacity": {"ownedIssueSlots": 1}
@@ -40,9 +41,10 @@ func TestLoadReadsOperatorReposLabelAndBinaryOverrides(t *testing.T) {
 
 	want := Config{
 		GitHub: GitHub{
-			Account:          "dwatts1772",
-			Repos:            []string{"org/a", "org/b"},
-			EligibilityLabel: "agent-ready",
+			Account:             "dwatts1772",
+			Repos:               []string{"org/a", "org/b"},
+			EligibilityLabel:    "agent-ready",
+			PollIntervalSeconds: 30,
 		},
 		Claude:   Claude{EntrySkill: "/work-item"},
 		Binaries: map[string]string{"gh": gh, "git": git, "orca": orca, "claude": claude},
@@ -63,6 +65,7 @@ func TestLoadRejectsIncompleteConfig(t *testing.T) {
 		"relative bin":         {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"binaries":{"gh":"gh"}}`, "absolute"},
 		"shell in entry skill": {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"claude":{"entrySkill":"/x; rm -rf ~"}}`, "claude.entrySkill"},
 		"spaced entry skill":   {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"},"claude":{"entrySkill":"/a b"}}`, "claude.entrySkill"},
+		"bad interval":         {`{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l","pollIntervalSeconds":-1}}`, "github.pollIntervalSeconds"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -71,6 +74,16 @@ func TestLoadRejectsIncompleteConfig(t *testing.T) {
 				t.Errorf("err = %v, want mention of %q", err, c.wantErr)
 			}
 		})
+	}
+}
+
+func TestThePollIntervalDefaultsTo45Seconds(t *testing.T) {
+	cfg, err := Load(write(t, `{"github":{"account":"a","repos":["o/r"],"eligibilityLabel":"l"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.PollInterval(); got != 45*time.Second {
+		t.Errorf("PollInterval = %v, want 45s", got)
 	}
 }
 

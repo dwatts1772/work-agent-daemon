@@ -42,6 +42,16 @@ func Start(ctx context.Context, cfg config.Config, log *logging.Logger, searchDi
 	return &Daemon{cfg: cfg, github: gh, workspaces: workspace.NewOrca(runner), log: log}, nil
 }
 
+// OrcaAvailable reports whether an Orca runtime is reachable. It is a
+// signal read each Tick, never stored (ADR-0001).
+func (d *Daemon) OrcaAvailable(ctx context.Context) bool {
+	ok, err := d.workspaces.Available(ctx)
+	if err != nil {
+		d.log.Warn("orca unavailable", "err", err)
+	}
+	return ok
+}
+
 // Result is what one Tick observed and decided.
 type Result struct {
 	// Eligible counts the Eligible issues observed.
