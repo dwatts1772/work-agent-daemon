@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dwatts1772/work-agent-daemon/internal/logging"
 	"github.com/dwatts1772/work-agent-daemon/internal/process"
@@ -196,22 +197,59 @@ type CI struct {
 	Failed bool
 }
 
-// PullRequestCI reads the head commit of PR number in repo and the state of
-// the checks on it, in one call so the two always match.
-func (c *Client) PullRequestCI(ctx context.Context, repo string, number int) (CI, error) {
-	out, err := c.gh(ctx, "pr", "view", strconv.Itoa(number), "--repo", repo, "--json", "headRefOid,statusCheckRollup")
+// Status is what a pull request shows: its head's CI, and the feedback on it.
+type Status struct {
+	CI
+	// Feedback is every review and comment that counts as feedback, and
+	// Approved whether the PR is approved; see Triage.
+	Feedback []Feedback
+	Approved bool
+}
+
+// PullRequestStatus reads the head commit of PR number in repo, the state of
+// the checks on it, and its reviews and comments, in one call so they always
+// match. bots are the feedbackBots whose feedback counts.
+func (c *Client) PullRequestStatus(ctx context.Context, repo string, number int, bots []string) (Status, error) {
+	out, err := c.gh(ctx, "pr", "view", strconv.Itoa(number), "--repo", repo, "--json", "headRefOid,statusCheckRollup,reviews,comments")
 	if err != nil {
-		return CI{}, err
+		return Status{}, err
+	}
+	type author struct {
+		Login string `json:"login"`
 	}
 	var pr struct {
 		HeadRefOid        string  `json:"headRefOid"`
 		StatusCheckRollup []Check `json:"statusCheckRollup"`
+		Reviews           []struct {
+			ID                string    `json:"id"`
+			Author            author    `json:"author"`
+			AuthorAssociation string    `json:"authorAssociation"`
+			State             string    `json:"state"`
+			SubmittedAt       time.Time `json:"submittedAt"`
+		} `json:"reviews"`
+		Comments []struct {
+			ID                string    `json:"id"`
+			Author            author    `json:"author"`
+			AuthorAssociation string    `json:"authorAssociation"`
+			Body              string    `json:"body"`
+			CreatedAt         time.Time `json:"createdAt"`
+		} `json:"comments"`
 	}
 	if err := json.Unmarshal(out, &pr); err != nil {
-		return CI{}, fmt.Errorf("parse pull request %s#%d: %w", repo, number, err)
+		return Status{}, fmt.Errorf("parse pull request %s#%d: %w", repo, number, err)
 	}
-	settled, failed := Settle(pr.StatusCheckRollup)
-	return CI{HeadSHA: pr.HeadRefOid, Settled: settled, Failed: failed}, nil
+	var reviews []Review
+	for _, r := range pr.Reviews {
+		reviews = append(reviews, Review{ID: r.ID, Author: r.Author.Login, AuthorAssociation: r.AuthorAssociation, State: r.State, SubmittedAt: r.SubmittedAt})
+	}
+	var comments []Comment
+	for _, cm := range pr.Comments {
+		comments = append(comments, Comment{ID: cm.ID, Author: cm.Author.Login, AuthorAssociation: cm.AuthorAssociation, Body: cm.Body, CreatedAt: cm.CreatedAt})
+	}
+	s := Status{CI: CI{HeadSHA: pr.HeadRefOid}}
+	s.Settled, s.Failed = Settle(pr.StatusCheckRollup)
+	s.Feedback, s.Approved = Triage(c.account, bots, reviews, comments)
+	return s, nil
 }
 
 // Check is one entry of a commit's status check rollup: a check run

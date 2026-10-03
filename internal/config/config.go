@@ -34,6 +34,25 @@ type GitHub struct {
 	// PollIntervalSeconds is how often the tray app Ticks; 0 means the
 	// default.
 	PollIntervalSeconds int `json:"pollIntervalSeconds,omitempty"`
+	// QuietPeriodMinutes is the Quiet Period standalone comments must go
+	// quiet for before the daemon Wakes the Work Item for them; 0 means the
+	// default.
+	QuietPeriodMinutes int `json:"quietPeriodMinutes,omitempty"`
+	// FeedbackBots are bot logins whose feedback counts though they lack
+	// write access, such as "coderabbitai[bot]".
+	FeedbackBots []string `json:"feedbackBots,omitempty"`
+}
+
+// defaultQuietPeriodMinutes is the Quiet Period by default.
+const defaultQuietPeriodMinutes = 5
+
+// QuietPeriod is how long standalone comments must go quiet before they
+// Wake.
+func (c Config) QuietPeriod() time.Duration {
+	if c.GitHub.QuietPeriodMinutes == 0 {
+		return defaultQuietPeriodMinutes * time.Minute
+	}
+	return time.Duration(c.GitHub.QuietPeriodMinutes) * time.Minute
 }
 
 // PollInterval is how often the tray app Ticks.
@@ -115,6 +134,9 @@ func (c Config) validate() error {
 	}
 	if c.GitHub.PollIntervalSeconds < 0 {
 		return fmt.Errorf("github.pollIntervalSeconds must be positive")
+	}
+	if c.GitHub.QuietPeriodMinutes < 0 {
+		return fmt.Errorf("github.quietPeriodMinutes must be positive")
 	}
 	if !entrySkillPattern.MatchString(c.Claude.EntrySkill) {
 		return fmt.Errorf("claude.entrySkill %q must be a single skill name such as %s", c.Claude.EntrySkill, DefaultEntrySkill)

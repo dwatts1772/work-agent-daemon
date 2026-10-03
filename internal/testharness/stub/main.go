@@ -266,7 +266,8 @@ func prList(fx testharness.Fixture, args []string) {
 	fmt.Println(string(data))
 }
 
-// prView reports a PR's head commit and the checks on it.
+// prView reports a PR's head commit, the checks on it, and its reviews and
+// comments.
 func prView(fx testharness.Fixture, number string, args []string) {
 	fs := flag.NewFlagSet("pr view", flag.ContinueOnError)
 	repo := fs.String("repo", "", "")
@@ -282,7 +283,15 @@ func prView(fx testharness.Fixture, number string, args []string) {
 		for _, c := range p.Checks {
 			rollup = append(rollup, map[string]any{"__typename": "CheckRun", "name": c.Name, "status": c.Status, "conclusion": c.Conclusion})
 		}
-		out, _ := json.Marshal(map[string]any{"headRefOid": p.HeadSHA, "statusCheckRollup": rollup})
+		reviews := []map[string]any{}
+		for _, r := range p.Reviews {
+			reviews = append(reviews, map[string]any{"id": r.ID, "author": map[string]any{"login": r.Author}, "authorAssociation": r.AuthorAssociation, "body": r.Body, "state": r.State, "submittedAt": r.SubmittedAt})
+		}
+		comments := []map[string]any{}
+		for _, c := range p.Comments {
+			comments = append(comments, map[string]any{"id": c.ID, "author": map[string]any{"login": c.Author}, "authorAssociation": c.AuthorAssociation, "body": c.Body, "createdAt": c.CreatedAt})
+		}
+		out, _ := json.Marshal(map[string]any{"headRefOid": p.HeadSHA, "statusCheckRollup": rollup, "reviews": reviews, "comments": comments})
 		fmt.Println(string(out))
 		return
 	}

@@ -8,7 +8,7 @@ import (
 
 // ciEvent is the CI observation of PR 9 of org/a#1 at head sha.
 func ciEvent(sha string, settled, failed bool) Event {
-	return Event{Type: CIObserved, Repo: "org/a", Issue: 1, PR: 9, HeadSHA: sha, Settled: settled, Failed: failed, ObservedAt: t1}
+	return Event{Type: PRObserved, Repo: "org/a", Issue: 1, PR: 9, HeadSHA: sha, Settled: settled, Failed: failed, ObservedAt: t1}
 }
 
 // waitingForCI is org/a#1 Woken, with PR 9 linked and head sha recorded.
@@ -52,10 +52,10 @@ func TestCIThatIsRunningOrGreenNeverWakes(t *testing.T) {
 	for _, e := range []Event{ciEvent("aaa", false, true), ciEvent("aaa", false, false), ciEvent("aaa", true, false)} {
 		st := State{Items: []WorkItem{waitingForCI("aaa")}}
 
-		next, actions := Reconcile(st, []Event{e})
+		next, _ := Reconcile(st, []Event{e})
 
-		if len(actions) != 0 || len(PendingActions(next)) != 0 {
-			t.Errorf("settled=%v failed=%v: actions %+v, pending %+v; want none", e.Settled, e.Failed, actions, PendingActions(next))
+		if got, _ := next.Item("org/a#1"); got.DueWake != "" || len(PendingActions(next)) != 0 {
+			t.Errorf("settled=%v failed=%v: due %q, pending %+v; want no Wake", e.Settled, e.Failed, got.DueWake, PendingActions(next))
 		}
 	}
 }

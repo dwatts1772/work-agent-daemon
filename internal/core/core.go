@@ -145,8 +145,8 @@ func (d *Daemon) reconcile(ctx context.Context, current workflow.State) (workflo
 	next, prActions := workflow.Reconcile(next, prEvents)
 	actions = append(actions, prActions...)
 
-	next, ciActions := workflow.Reconcile(next, d.observeCI(ctx, next, now))
-	actions = append(actions, ciActions...)
+	next, statusActions := workflow.Reconcile(next, d.observePRStatus(ctx, next, now))
+	actions = append(actions, statusActions...)
 
 	// An issue that cannot be read, such as a deleted one, is treated as no
 	// longer Eligible: it is Paused, never lost, and never fails the Tick.
@@ -192,24 +192,29 @@ func (d *Daemon) observePRs(ctx context.Context, st workflow.State, now time.Tim
 	return events, nil
 }
 
-// observeCI reads the head commit and CI state of the linked PR of every
-// Owned Issue whose CI can still change it. A PR that cannot be read is
-// skipped with a warning and observed again next Tick; it never fails the
-// Tick.
-func (d *Daemon) observeCI(ctx context.Context, st workflow.State, now time.Time) []workflow.Event {
+// observePRStatus reads the head commit, CI state and feedback of the
+// linked PR of every Owned Issue it can still change. A PR that cannot be
+// read is skipped with a warning and observed again next Tick; it never
+// fails the Tick.
+func (d *Daemon) observePRStatus(ctx context.Context, st workflow.State, now time.Time) []workflow.Event {
 	var events []workflow.Event
 	for _, w := range st.Items {
-		if !w.WatchesCI() {
+		if !w.WatchesPR() {
 			continue
 		}
-		ci, err := d.github.PullRequestCI(ctx, w.Repo, w.PR)
+		s, err := d.github.PullRequestStatus(ctx, w.Repo, w.PR, d.cfg.GitHub.FeedbackBots)
 		if err != nil {
-			d.log.Warn("cannot read CI of the linked PR; retrying next Tick", "item", w.ID, "pr", w.PR, "err", err)
+			d.log.Warn("cannot read the linked PR; retrying next Tick", "item", w.ID, "pr", w.PR, "err", err)
 			continue
+		}
+		var feedback []workflow.Feedback
+		for _, f := range s.Feedback {
+			feedback = append(feedback, workflow.Feedback{ID: f.ID, Review: f.Review, At: f.At})
 		}
 		events = append(events, workflow.Event{
-			Type: workflow.CIObserved, Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL,
-			PR: w.PR, PRURL: w.PRURL, HeadSHA: ci.HeadSHA, Settled: ci.Settled, Failed: ci.Failed, ObservedAt: now,
+			Type: workflow.PRObserved, Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL,
+			PR: w.PR, PRURL: w.PRURL, HeadSHA: s.HeadSHA, Settled: s.Settled, Failed: s.Failed,
+			Feedback: feedback, Approved: s.Approved, QuietPeriod: d.cfg.QuietPeriod(), ObservedAt: now,
 		})
 	}
 	return events
