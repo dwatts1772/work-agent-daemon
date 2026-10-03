@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/dwatts1772/work-agent-daemon/internal/state"
 	"github.com/dwatts1772/work-agent-daemon/internal/testharness"
+	"github.com/dwatts1772/work-agent-daemon/internal/workflow"
 )
 
 const (
@@ -228,4 +233,181 @@ func TestBadInvocationsFail(t *testing.T) {
 	if code := run([]string{"tick", "--config", filepath.Join(t.TempDir(), "missing.json")}, &out, &errOut); code == 0 {
 		t.Error("tick with missing config exited 0")
 	}
+}
+
+func (c *cli) stateDir() string { return filepath.Dir(c.configPath) }
+
+func (c *cli) savedState(t *testing.T) workflow.State {
+	t.Helper()
+	st, err := state.Read(c.stateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func (c *cli) mustTick(t *testing.T, args ...string) string {
+	t.Helper()
+	code, stdout, stderr := c.run(t, append([]string{"tick"}, args...)...)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	return stdout
+}
+
+func itemIDs(st workflow.State) []string {
+	var ids []string
+	for _, w := range st.Items {
+		ids = append(ids, w.ID)
+	}
+	return ids
+}
+
+func TestTickRecordsEachEligibleIssueAsOneOwnedIssue(t *testing.T) {
+	c := newCLI(t, world())
+
+	stdout := c.mustTick(t)
+
+	st := c.savedState(t)
+	if got := itemIDs(st); !slices.Equal(got, []string{"org/a#1", "org/b#7"}) {
+		t.Fatalf("Owned Issues = %v, want org/a#1 and org/b#7", got)
+	}
+	for _, w := range st.Items {
+		if w.Kind != workflow.KindOwnedIssue || w.State != workflow.PendingWorkspace {
+			t.Errorf("%s is %s/%s, want OWNED_ISSUE/PENDING_WORKSPACE", w.ID, w.Kind, w.State)
+		}
+		if !slices.Contains(w.ProcessedEventIDs, w.ID+":assigned") {
+			t.Errorf("%s has no dedupe marker: %v", w.ID, w.ProcessedEventIDs)
+		}
+	}
+	if !strings.Contains(stdout, "CREATE_OWNED_ISSUE") {
+		t.Errorf("stdout does not report the actions:\n%s", stdout)
+	}
+}
+
+// Each run() reloads state.json from disk, so a second Tick is also a
+// process restart.
+func TestReRunningTheTickCreatesNoDuplicatesAndKeepsState(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+	first := c.savedState(t)
+
+	stdout := c.mustTick(t)
+
+	if again := c.savedState(t); !reflect.DeepEqual(again, first) {
+		t.Errorf("re-running the Tick changed state:\nbefore %+v\nafter  %+v", first, again)
+	}
+	if strings.Contains(stdout, "CREATE_OWNED_ISSUE") {
+		t.Errorf("re-run reported new Owned Issues:\n%s", stdout)
+	}
+}
+
+func TestTickAddsOnlyNewlyEligibleIssues(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+	before := c.savedState(t)
+
+	fx := world()
+	fx.Issues["org/a"][1].Labels = append(fx.Issues["org/a"][1].Labels, "agent-ready")
+	c.stubs.SetFixture(t, fx)
+	c.mustTick(t)
+
+	after := c.savedState(t)
+	if got := itemIDs(after); !slices.Equal(got, []string{"org/a#1", "org/b#7", "org/a#2"}) {
+		t.Fatalf("Owned Issues = %v", got)
+	}
+	if !reflect.DeepEqual(after.Items[:2], before.Items) {
+		t.Errorf("existing Owned Issues changed")
+	}
+}
+
+func TestDryRunPrintsActionsAndWritesNothing(t *testing.T) {
+	c := newCLI(t, world())
+	c.mustTick(t)
+	fx := world()
+	fx.Issues["org/a"][1].Labels = append(fx.Issues["org/a"][1].Labels, "agent-ready")
+	c.stubs.SetFixture(t, fx)
+	before := snapshot(t, c.stateDir())
+
+	stdout := c.mustTick(t, "--dry-run")
+
+	if after := snapshot(t, c.stateDir()); !reflect.DeepEqual(after, before) {
+		t.Errorf("--dry-run wrote to the state directory:\nbefore %v\nafter  %v", before, after)
+	}
+	if !strings.Contains(stdout, "CREATE_OWNED_ISSUE\torg/a#2") {
+		t.Errorf("dry run does not print the new Owned Issue:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "org/a#1") {
+		t.Errorf("dry run reports an already-tracked issue:\n%s", stdout)
+	}
+	for _, call := range c.stubs.Calls(t) {
+		if call.Bin == "orca" || call.Bin == "claude" || call.Bin == "git" {
+			t.Errorf("--dry-run ran %s %v", call.Bin, call.Args)
+		}
+	}
+}
+
+func TestDryRunOnAFreshStateDirectoryCreatesNothing(t *testing.T) {
+	c := newCLI(t, world())
+	before := snapshot(t, c.stateDir())
+
+	stdout := c.mustTick(t, "--dry-run")
+
+	if after := snapshot(t, c.stateDir()); !reflect.DeepEqual(after, before) {
+		t.Errorf("--dry-run wrote to the state directory:\nbefore %v\nafter  %v", before, after)
+	}
+	if !strings.Contains(stdout, "CREATE_OWNED_ISSUE\torg/a#1") {
+		t.Errorf("stdout:\n%s", stdout)
+	}
+}
+
+func TestSecondConcurrentTickFailsFastOnTheLock(t *testing.T) {
+	c := newCLI(t, world())
+	held, err := state.Open(c.stateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	start := time.Now()
+	code, _, stderr := c.run(t, "tick")
+
+	if code == 0 {
+		t.Fatal("a second Tick ran while the state directory was locked")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("took %v; must fail fast", took)
+	}
+	if !strings.Contains(stderr, "locked") {
+		t.Errorf("stderr should say the state directory is locked:\n%s", stderr)
+	}
+	if calls := c.stubs.Calls(t); len(calls) != 0 {
+		t.Errorf("touched GitHub despite the lock: %+v", calls)
+	}
+	if _, err := os.Stat(filepath.Join(c.stateDir(), "state.json")); !os.IsNotExist(err) {
+		t.Errorf("state.json written despite the lock")
+	}
+}
+
+// snapshot maps every file under dir to its contents.
+func snapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		if d.IsDir() {
+			files[rel+"/"] = ""
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		files[rel] = string(data)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
 }
