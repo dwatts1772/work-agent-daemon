@@ -171,6 +171,66 @@ func (c *Client) OperatorPullRequests(ctx context.Context, repo string) ([]PullR
 	return prs, nil
 }
 
+// ReviewRequest is an open pull request on which the Operator is
+// explicitly requested as a reviewer, with the CI state of its head.
+type ReviewRequest struct {
+	Repo   string
+	Number int
+	Title  string
+	URL    string
+	CI     CI
+}
+
+// ReviewRequests lists the open pull requests in repo, by other developers,
+// on which the Operator is requested as a reviewer by name — not through a
+// team — with the CI state of each head commit.
+func (c *Client) ReviewRequests(ctx context.Context, repo string) ([]ReviewRequest, error) {
+	out, err := c.gh(ctx, "pr", "list",
+		"--repo", repo,
+		"--search", "user-review-requested:"+c.account,
+		"--state", "open",
+		"--limit", strconv.Itoa(prLimit),
+		"--json", "number,title,url,author,headRefOid,reviewRequests,statusCheckRollup",
+	)
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		URL    string `json:"url"`
+		Author struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		HeadRefOid     string `json:"headRefOid"`
+		ReviewRequests []struct {
+			Typename string `json:"__typename"`
+			Login    string `json:"login"`
+		} `json:"reviewRequests"`
+		StatusCheckRollup []Check `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("parse review requests for %s: %w", repo, err)
+	}
+
+	// Re-check the search, as EligibleIssues re-checks its filters: only an
+	// explicit request of the Operator, on someone else's PR, counts.
+	var requests []ReviewRequest
+	for _, r := range raw {
+		requested := false
+		for _, rr := range r.ReviewRequests {
+			requested = requested || (rr.Typename == "User" && strings.EqualFold(rr.Login, c.account))
+		}
+		if !requested || strings.EqualFold(r.Author.Login, c.account) {
+			continue
+		}
+		settled, failed := Settle(r.StatusCheckRollup)
+		requests = append(requests, ReviewRequest{Repo: repo, Number: r.Number, Title: r.Title, URL: r.URL,
+			CI: CI{HeadSHA: r.HeadRefOid, Settled: settled, Failed: failed}})
+	}
+	return requests, nil
+}
+
 // IssueClosed reports whether issue number in repo is closed.
 func (c *Client) IssueClosed(ctx context.Context, repo string, number int) (bool, error) {
 	out, err := c.gh(ctx, "issue", "view", strconv.Itoa(number), "--repo", repo, "--json", "state")

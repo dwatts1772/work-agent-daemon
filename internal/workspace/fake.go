@@ -38,10 +38,23 @@ func (f *Fake) CreateForIssue(_ context.Context, in CreateInput) (Workspace, err
 	if f.Unavailable {
 		return Workspace{}, fmt.Errorf("fake backend unavailable")
 	}
-	name := fmt.Sprintf("issue-%d", in.Issue)
+	return f.create(in.Repo, fmt.Sprintf("issue-%d", in.Issue))
+}
+
+// CreateForReview records and returns a made-up Review Workspace.
+func (f *Fake) CreateForReview(_ context.Context, in ReviewInput) (Workspace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Unavailable {
+		return Workspace{}, fmt.Errorf("fake backend unavailable")
+	}
+	return f.create(in.Repo, fmt.Sprintf("review-pr-%d", in.PR))
+}
+
+func (f *Fake) create(repo, name string) (Workspace, error) {
 	ws := Workspace{
-		OrcaIdentityKey: in.Repo + "/" + name,
-		Path:            "/fake/" + in.Repo + "/" + name,
+		OrcaIdentityKey: repo + "/" + name,
+		Path:            "/fake/" + repo + "/" + name,
 		Branch:          name,
 		ClaudeSessionID: fmt.Sprintf("fake-session-%d", len(f.Created)+1),
 	}

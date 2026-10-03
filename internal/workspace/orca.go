@@ -112,27 +112,53 @@ func (o *Orca) Available(ctx context.Context) (bool, error) {
 // linked to the issue, with a fresh daemon-owned Claude session ID
 // (ADR-0002). It starts no agent: the first Wake starts Claude with that ID.
 func (o *Orca) CreateForIssue(ctx context.Context, in CreateInput) (Workspace, error) {
-	repoID, err := o.repoID(ctx, in.Repo)
+	repo, err := o.repo(ctx, in.Repo)
 	if err != nil {
 		return Workspace{}, err
 	}
+	return o.create(ctx, repo, "issue-"+strconv.Itoa(in.Issue), "--issue", strconv.Itoa(in.Issue))
+}
+
+// CreateForReview creates the Review Request's Review Workspace (ADR-0003):
+// it fetches the PR's head from GitHub's pull ref, which works for forks
+// too, into <remote>/pr/<n> in the repo's Orca clone, then creates a new
+// Orca worktree on a new local branch review-pr-<n> starting there. Orca
+// creates that branch without tracking anything, so it has no path to push
+// to the PR author's branch. Like CreateForIssue it starts no agent.
+func (o *Orca) CreateForReview(ctx context.Context, in ReviewInput) (Workspace, error) {
+	repo, err := o.repo(ctx, in.Repo)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if repo.Path == "" || repo.Remote == "" {
+		return Workspace{}, fmt.Errorf("orca repo list: %s has no local path or remote", in.Repo)
+	}
+	n := strconv.Itoa(in.PR)
+	base := repo.Remote + "/pr/" + n
+	if _, err := o.runner.Run(ctx, "git", []string{"-C", repo.Path, "fetch", repo.Remote, "+refs/pull/" + n + "/head:refs/remotes/" + base}); err != nil {
+		return Workspace{}, fmt.Errorf("fetch the head of %s#%d: %w", in.Repo, in.PR, err)
+	}
+	return o.create(ctx, repo, "review-pr-"+n, "--base-branch", base)
+}
+
+// create creates a new Orca worktree called name in repo, with a fresh
+// daemon-owned Claude session ID (ADR-0002).
+func (o *Orca) create(ctx context.Context, repo orcaRepo, name string, extra ...string) (Workspace, error) {
 	sessionID, err := newSessionID()
 	if err != nil {
 		return Workspace{}, err
 	}
-	name := "issue-" + strconv.Itoa(in.Issue)
 	var created struct {
 		Worktree orcaWorktree `json:"worktree"`
 	}
-	err = o.call(ctx, &created, "worktree", "create",
-		"--repo", "id:"+repoID,
+	args := append([]string{"worktree", "create",
+		"--repo", "id:" + repo.ID,
 		"--name", name,
-		"--issue", strconv.Itoa(in.Issue),
 		// The daemon is not working inside another Workspace; never let
 		// Orca infer a parent from the caller's directory.
 		"--no-parent",
-	)
-	if err != nil {
+	}, extra...)
+	if err := o.call(ctx, &created, args...); err != nil {
 		return Workspace{}, err
 	}
 	wt := created.Worktree
@@ -155,25 +181,33 @@ type orcaWorktree struct {
 	Branch string `json:"branch"`
 }
 
-// repoID finds the Orca repo whose GitHub remote is repo ("owner/name").
-func (o *Orca) repoID(ctx context.Context, repo string) (string, error) {
+// orcaRepo is a repo registered in Orca: its id, the path of its local
+// clone, and the name of that clone's GitHub remote.
+type orcaRepo struct {
+	ID, Path, Remote string
+}
+
+// repo finds the Orca repo whose GitHub remote is repo ("owner/name").
+func (o *Orca) repo(ctx context.Context, repo string) (orcaRepo, error) {
 	var list struct {
 		Repos []struct {
 			ID                string `json:"id"`
+			Path              string `json:"path"`
 			GitRemoteIdentity *struct {
 				CanonicalKey string `json:"canonicalKey"`
+				RemoteName   string `json:"remoteName"`
 			} `json:"gitRemoteIdentity"`
 		} `json:"repos"`
 	}
 	if err := o.call(ctx, &list, "repo", "list"); err != nil {
-		return "", err
+		return orcaRepo{}, err
 	}
 	for _, r := range list.Repos {
 		if r.GitRemoteIdentity != nil && strings.EqualFold(r.GitRemoteIdentity.CanonicalKey, "github.com/"+repo) {
-			return r.ID, nil
+			return orcaRepo{ID: r.ID, Path: r.Path, Remote: r.GitRemoteIdentity.RemoteName}, nil
 		}
 	}
-	return "", fmt.Errorf("%s is not registered in Orca; add a clone of it with `orca repo add --path <clone>`", repo)
+	return orcaRepo{}, fmt.Errorf("%s is not registered in Orca; add a clone of it with `orca repo add --path <clone>`", repo)
 }
 
 // newSessionID returns a random (version 4) UUID.

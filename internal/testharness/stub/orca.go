@@ -23,7 +23,7 @@ func orca(dir string, rt *testharness.Orca, args []string) {
 	}
 	switch {
 	case len(args) >= 2 && args[0] == "repo" && args[1] == "list":
-		orcaRepoList(rt)
+		orcaRepoList(dir, rt)
 	case len(args) >= 2 && args[0] == "worktree" && args[1] == "create":
 		orcaWorktreeCreate(dir, rt, args[2:])
 	case len(args) >= 2 && args[0] == "worktree" && args[1] == "show":
@@ -51,11 +51,12 @@ func orcaStatus(rt *testharness.Orca) {
 	orcaOK(map[string]any{"app": map[string]any{"running": rt != nil}, "runtime": runtime})
 }
 
-func orcaRepoList(rt *testharness.Orca) {
+func orcaRepoList(dir string, rt *testharness.Orca) {
 	repos := []map[string]any{}
 	for id, ghRepo := range rt.Repos {
 		repos = append(repos, map[string]any{
 			"id":                id,
+			"path":              filepath.ToSlash(filepath.Join(dir, "clones", id)),
 			"displayName":       ghRepo,
 			"gitRemoteIdentity": map[string]any{"canonicalKey": "github.com/" + ghRepo, "remoteName": "origin"},
 		})
@@ -68,6 +69,7 @@ func orcaWorktreeCreate(dir string, rt *testharness.Orca, args []string) {
 	repo := fs.String("repo", "", "")
 	name := fs.String("name", "", "")
 	issue := fs.Int("issue", 0, "")
+	base := fs.String("base-branch", "", "")
 	fs.Bool("no-parent", false, "")
 	fs.Bool("json", false, "")
 	if err := fs.Parse(args); err != nil {
@@ -91,6 +93,7 @@ func orcaWorktreeCreate(dir string, rt *testharness.Orca, args []string) {
 		Path:        filepath.ToSlash(filepath.Join(dir, "workspaces", repoID, *name)),
 		Branch:      "refs/heads/" + *name,
 		Issue:       *issue,
+		BaseBranch:  *base,
 	}
 	saveWorktrees(dir, append(wts, wt))
 	orcaOK(map[string]any{"worktree": worktreeJSON(wt)})

@@ -19,8 +19,7 @@ import (
 type Kind string
 
 const (
-	KindOwnedIssue Kind = "OWNED_ISSUE"
-	// KindReviewRequest is a Review Request; none are tracked yet.
+	KindOwnedIssue    Kind = "OWNED_ISSUE"
 	KindReviewRequest Kind = "REVIEW_REQUEST"
 )
 
@@ -30,8 +29,8 @@ const (
 type ItemState string
 
 const (
-	// PendingWorkspace is an Owned Issue not yet Woken in its Workspace;
-	// the Workspace may or may not exist yet.
+	// PendingWorkspace is a Work Item not yet Woken in its Workspace; the
+	// Workspace may or may not exist yet.
 	PendingWorkspace ItemState = "PENDING_WORKSPACE"
 	// InProgress is an Owned Issue Woken in its Workspace, with no PR yet.
 	InProgress ItemState = "IN_PROGRESS"
@@ -43,6 +42,9 @@ const (
 	// AddressingFeedback is an Owned Issue Woken for a CI failure on its
 	// PR's head, until the head SHA changes.
 	AddressingFeedback ItemState = "ADDRESSING_FEEDBACK"
+	// Reviewing is a Review Request Woken in its Review Workspace to review
+	// the PR's head.
+	Reviewing ItemState = "REVIEWING"
 	// Done is a Work Item whose PR was merged or closed, or whose issue was
 	// closed. It is final: the daemon never Wakes it or changes it again.
 	Done ItemState = "DONE"
@@ -79,6 +81,8 @@ const (
 	// WakeCIFailure Wakes Claude because CI on its PR's head Settled with a
 	// failure.
 	WakeCIFailure WakeReason = "ci-failure"
+	// WakeReview Wakes Claude to review a Review Request's PR.
+	WakeReview WakeReason = "review"
 )
 
 // HoldReason is why a Wake is Held.
@@ -100,9 +104,10 @@ type HeldWake struct {
 	Why    HoldReason `json:"why"`
 }
 
-// WorkItem is one tracked unit of work. Only Owned Issues exist so far.
+// WorkItem is one tracked unit of work: an Owned Issue or a Review Request.
 type WorkItem struct {
-	// ID is the issue reference, "owner/name#number".
+	// ID is the reference of the Owned Issue's issue or the Review
+	// Request's PR, "owner/name#number".
 	ID       string    `json:"id"`
 	Kind     Kind      `json:"kind"`
 	State    ItemState `json:"state"`
@@ -112,10 +117,11 @@ type WorkItem struct {
 	IssueURL string    `json:"issueUrl"`
 	// Workspace is set once the Workspace exists.
 	Workspace *workspace.Workspace `json:"workspace,omitempty"`
-	// PR is the number of the pull request linked to the Work Item, if any.
+	// PR is the number of the pull request linked to an Owned Issue, if
+	// any, or of a Review Request's PR.
 	PR    int    `json:"pr,omitempty"`
 	PRURL string `json:"prUrl,omitempty"`
-	// HeadSHA is the linked PR's head commit as last observed.
+	// HeadSHA is the PR's head commit as last observed.
 	HeadSHA string `json:"headSha,omitempty"`
 	// Pause is set while the item is Paused.
 	Pause *Pause `json:"pause,omitempty"`
@@ -206,6 +212,10 @@ const (
 	// CIObserved is the observation of the CI state of the head commit of
 	// a tracked Owned Issue's linked PR.
 	CIObserved EventType = "CI_OBSERVED"
+	// ReviewRequested is the observation of an open PR in an allowlisted
+	// repo on which the Operator is explicitly requested as a reviewer, with
+	// the CI state of its head commit.
+	ReviewRequested EventType = "REVIEW_REQUESTED"
 )
 
 // Event is one observation from a Tick.
@@ -219,14 +229,22 @@ type Event struct {
 	PR    int
 	PRURL string
 	// HeadSHA is the PR's head commit; Settled and Failed are its CI state.
-	HeadSHA    string
-	Settled    bool
-	Failed     bool
+	HeadSHA string
+	Settled bool
+	Failed  bool
+	// Reviewer is the requested reviewer of a ReviewRequested event.
+	Reviewer   string
 	ObservedAt time.Time
 }
 
-// Ref is the "owner/name#number" the event is about.
-func (e Event) Ref() string { return e.Repo + "#" + strconv.Itoa(e.Issue) }
+// Ref is the "owner/name#number" the event is about: the PR of a
+// ReviewRequested event, otherwise the issue.
+func (e Event) Ref() string {
+	if e.Type == ReviewRequested {
+		return e.Repo + "#" + strconv.Itoa(e.PR)
+	}
+	return e.Repo + "#" + strconv.Itoa(e.Issue)
+}
 
 // Marker is the event's stable dedupe marker: observing the same thing again
 // on a later Tick yields the same marker.
@@ -236,6 +254,8 @@ func (e Event) Marker() string {
 		return e.Ref() + ":assigned"
 	case CIObserved:
 		return e.Repo + "#" + strconv.Itoa(e.PR) + ":ci:" + e.HeadSHA
+	case ReviewRequested:
+		return e.Ref() + ":review-request:" + e.Reviewer + ":" + e.HeadSHA
 	}
 	return e.Ref() + ":" + string(e.Type)
 }
@@ -246,6 +266,8 @@ type ActionType string
 const (
 	// CreateOwnedIssue starts tracking Item.
 	CreateOwnedIssue ActionType = "CREATE_OWNED_ISSUE"
+	// CreateReviewRequest starts tracking Item.
+	CreateReviewRequest ActionType = "CREATE_REVIEW_REQUEST"
 	// CreateWorkspace creates Item's Workspace.
 	CreateWorkspace ActionType = "CREATE_WORKSPACE"
 	// Wake Wakes Claude in Item's Workspace for Reason.
@@ -265,7 +287,8 @@ const (
 )
 
 // Action is something the reducer decided should happen to Item; for every
-// action but CreateOwnedIssue, Item is the item's new record.
+// action but CreateOwnedIssue and CreateReviewRequest, Item is the item's
+// new record.
 type Action struct {
 	Type   ActionType
 	Item   WorkItem
@@ -289,8 +312,36 @@ func Reduce(state State, event Event) []Action {
 		return reduceDone(state, event)
 	case CIObserved:
 		return reduceCI(state, event)
+	case ReviewRequested:
+		return reduceReviewRequested(state, event)
 	}
 	return nil
+}
+
+// reduceReviewRequested starts tracking a Review Request once CI on its
+// head is Settled, pass or fail. The Work Item is keyed by the PR, so a PR
+// already tracked is never recorded twice; a new head on a tracked PR is
+// left alone here.
+func reduceReviewRequested(state State, event Event) []Action {
+	if !event.Settled || event.HeadSHA == "" {
+		return nil
+	}
+	if _, i := state.find(event.Ref()); i >= 0 {
+		return nil
+	}
+	return []Action{{Type: CreateReviewRequest, Item: WorkItem{
+		ID:                event.Ref(),
+		Kind:              KindReviewRequest,
+		State:             PendingWorkspace,
+		Repo:              event.Repo,
+		Title:             event.Title,
+		PR:                event.PR,
+		PRURL:             event.PRURL,
+		HeadSHA:           event.HeadSHA,
+		ProcessedEventIDs: []string{event.Marker()},
+		CreatedAt:         event.ObservedAt,
+		UpdatedAt:         event.ObservedAt,
+	}}}
 }
 
 // reduceCI records the linked PR's head SHA and, the first time CI on a head
@@ -439,7 +490,7 @@ func Apply(state State, actions []Action) State {
 	next := state.clone()
 	for _, a := range actions {
 		switch a.Type {
-		case CreateOwnedIssue:
+		case CreateOwnedIssue, CreateReviewRequest:
 			next.Items = append(next.Items, a.Item)
 		case PauseItem, ResumeItem, LinkPR, MarkDone, HeadChanged, CIFailed:
 			if _, i := next.find(a.Item.ID); i >= 0 {
@@ -502,9 +553,9 @@ func (s State) Item(id string) (WorkItem, bool) {
 	return w, i >= 0
 }
 
-// PendingActions decides the Workspace actions Owned Issues still need: one
+// PendingActions decides the Workspace actions Work Items still need: one
 // in PendingWorkspace has its Workspace created if none is recorded, then is
-// Woken; one waiting for CI with a Wake due is Woken. They repeat on every
+// Woken; an Owned Issue waiting for CI with a Wake due is Woken. They repeat on every
 // Tick until their outcome is recorded, which is how a Held Wake is retried.
 func PendingActions(state State) []Action {
 	var actions []Action
@@ -524,6 +575,8 @@ func PendingActions(state State) []Action {
 // WakeDue returns the reason w is still to be Woken, if it is.
 func WakeDue(w WorkItem) (WakeReason, bool) {
 	switch {
+	case w.Kind == KindReviewRequest:
+		return WakeReview, w.State == PendingWorkspace
 	case w.Kind != KindOwnedIssue:
 		return "", false
 	case w.State == PendingWorkspace:
@@ -541,7 +594,8 @@ func WakePrompt(entrySkill string, reason WakeReason, ref string) string {
 }
 
 // WakeRef is the reference a Wake for reason names: the issue for an issue
-// Wake, the linked PR for a ci-failure Wake.
+// Wake, the linked PR for a ci-failure Wake, and the Review Request's PR,
+// its ID, for a review Wake.
 func (w WorkItem) WakeRef(reason WakeReason) string {
 	if reason == WakeCIFailure {
 		return w.Repo + "#" + strconv.Itoa(w.PR)
@@ -558,12 +612,16 @@ func WorkspaceCreated(state State, id string, ws workspace.Workspace, now time.T
 }
 
 // Woken records the Work Item's Wake for reason: the first Wake moves it to
-// InProgress, a ci-failure Wake to AddressingFeedback.
+// InProgress, a ci-failure Wake to AddressingFeedback, a review Wake to
+// Reviewing.
 func Woken(state State, id string, reason WakeReason, now time.Time) State {
 	return update(state, id, now, func(w *WorkItem) {
 		w.State = InProgress
-		if reason == WakeCIFailure {
+		switch reason {
+		case WakeCIFailure:
 			w.State = AddressingFeedback
+		case WakeReview:
+			w.State = Reviewing
 		}
 		w.DueWake = ""
 		w.LastWakeAt = &now
