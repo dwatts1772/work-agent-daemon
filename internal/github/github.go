@@ -311,9 +311,9 @@ type CI struct {
 type Status struct {
 	CI
 	// Feedback is every review and comment that counts as feedback, and
-	// Approved whether the PR is approved; see Triage.
-	Feedback []Feedback
-	Approved bool
+	// ChangesRequested whether a change request still stands; see Triage.
+	Feedback         []Feedback
+	ChangesRequested bool
 }
 
 // PullRequestStatus reads the head commit of PR number in repo, the state of
@@ -358,7 +358,7 @@ func (c *Client) PullRequestStatus(ctx context.Context, repo string, number int,
 	}
 	s := Status{CI: CI{HeadSHA: pr.HeadRefOid}}
 	s.Settled, s.Failed = Settle(pr.StatusCheckRollup)
-	s.Feedback, s.Approved = Triage(c.account, bots, reviews, comments)
+	s.Feedback, s.ChangesRequested = Triage(c.account, bots, reviews, comments)
 	return s, nil
 }
 

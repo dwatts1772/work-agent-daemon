@@ -60,15 +60,21 @@ func (d *Daemon) notify(ctx context.Context, st workflow.State, acted, held bool
 		}
 		agents[w.ID] = s
 	}
-	if err := d.once.Observe(conditions(st, available, agents), unknown); err != nil {
+	current, waiting := conditions(st, available, agents)
+	if err := d.once.Observe(current, append(unknown, waiting...)); err != nil {
 		d.log.Warn("notification not delivered", "err", err)
 	}
 }
 
 // conditions are the Notifications for everything that holds: Orca's
 // availability, each Work Item's state, and each Workspace's agent state.
-func conditions(st workflow.State, orcaAvailable bool, agents map[string]workspace.AgentState) []notify.Notification {
-	var out []notify.Notification
+//
+// READY_TO_MERGE is the hand-off to the Operator, so it is held while the
+// Workspace's agent is working or its state is unknown: Claude may still be
+// pushing to the draft PR, whose CI went green between pushes (#37). A held
+// condition is neither delivered nor cleared, so the Operator is told once
+// the agent stops, and not again if it starts and stops on the same head.
+func conditions(st workflow.State, orcaAvailable bool, agents map[string]workspace.AgentState) (out, held []notify.Notification) {
 	if !orcaAvailable {
 		out = append(out, orcaUnavailable())
 	}
@@ -81,7 +87,12 @@ func conditions(st workflow.State, orcaAvailable bool, agents map[string]workspa
 			}
 			out = append(out, notify.Notification{Kind: notify.Paused, Item: w.ID, Title: "Paused: " + w.ID, Body: w.Title + "\n" + why})
 		case workflow.ReadyToMerge:
-			out = append(out, notify.Notification{Kind: notify.ReadyToMerge, Item: w.ID, Title: "Ready to merge: " + w.ID, Body: w.Title})
+			n := notify.Notification{Kind: notify.ReadyToMerge, Item: w.ID, Title: "Ready to merge: " + w.ID, Body: w.Title}
+			if s, read := agents[w.ID]; w.Workspace != nil && (!read || s == workspace.AgentWorking) {
+				held = append(held, n)
+			} else {
+				out = append(out, n)
+			}
 		case workflow.Failed:
 			out = append(out, notify.Notification{Kind: notify.Failed, Item: w.ID, Title: "FAILED: " + w.ID, Body: w.Title + "\n" + w.LastError})
 		}
@@ -89,7 +100,7 @@ func conditions(st workflow.State, orcaAvailable bool, agents map[string]workspa
 			out = append(out, agentWaiting(w))
 		}
 	}
-	return out
+	return out, held
 }
 
 func orcaUnavailable() notify.Notification {

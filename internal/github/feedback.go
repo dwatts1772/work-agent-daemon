@@ -34,16 +34,17 @@ type Feedback struct {
 }
 
 // Triage decides which reviews and comments, in GitHub's chronological
-// order, count as feedback, and whether the pull request is approved.
+// order, count as feedback, and whether a change request still stands.
 //
 // Only authors with write access (OWNER, MEMBER, COLLABORATOR) or listed in
 // bots count, and never the Operator, whose account Claude itself comments
 // as. A submitted review counts when it comments or requests changes; a
 // comment counts when it says something outside quoted text and code
-// fences. The PR is approved when, taking each counted author's latest
-// approval, change request or dismissal, at least one approves and none
-// requests changes.
-func Triage(operator string, bots []string, reviews []Review, comments []Comment) (feedback []Feedback, approved bool) {
+// fences. A change request stands while it is the latest verdict (approval
+// or change request) of a counted author. GitHub turns a dismissed review
+// into a review comment, in place, so it carries no verdict: dismissing an
+// approval over a change request leaves the change request standing.
+func Triage(operator string, bots []string, reviews []Review, comments []Comment) (feedback []Feedback, changesRequested bool) {
 	allowed := func(author, association string) bool {
 		if strings.EqualFold(author, operator) {
 			return false
@@ -71,7 +72,7 @@ func Triage(operator string, bots []string, reviews []Review, comments []Comment
 			if state == "CHANGES_REQUESTED" {
 				verdicts[strings.ToLower(r.Author)] = state
 			}
-		case "APPROVED", "DISMISSED":
+		case "APPROVED":
 			verdicts[strings.ToLower(r.Author)] = state
 		}
 	}
@@ -82,14 +83,11 @@ func Triage(operator string, bots []string, reviews []Review, comments []Comment
 	}
 
 	for _, v := range verdicts {
-		switch v {
-		case "CHANGES_REQUESTED":
-			return feedback, false
-		case "APPROVED":
-			approved = true
+		if v == "CHANGES_REQUESTED" {
+			return feedback, true
 		}
 	}
-	return feedback, approved
+	return feedback, false
 }
 
 // botLogin normalises a bot's login: GitHub's REST API names a bot

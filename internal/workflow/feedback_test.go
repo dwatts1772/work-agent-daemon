@@ -93,11 +93,12 @@ func TestAReviewWakesForTheWholeBatchWithoutWaitingForQuiet(t *testing.T) {
 	}
 }
 
-func TestGreenCIWithAnApprovalAndNoFeedbackIsReadyToMerge(t *testing.T) {
-	approved := observed("aaa", t1)
-	approved.Approved = true
+// A solo Operator's PR has nobody to approve it: green CI and no actionable
+// feedback is READY_TO_MERGE without an approval (PRD §4.E, #37).
+func TestGreenCIWithNoActionableFeedbackIsReadyToMergeWithoutAnApproval(t *testing.T) {
+	green := observed("aaa", t1)
 
-	next, actions := Reconcile(State{Items: []WorkItem{waitingForCI("aaa")}}, []Event{approved})
+	next, actions := Reconcile(State{Items: []WorkItem{waitingForCI("aaa")}}, []Event{green})
 
 	got, _ := next.Item("org/a#1")
 	if len(actions) != 1 || actions[0].Type != CIPassed || got.State != ReadyToMerge {
@@ -106,15 +107,15 @@ func TestGreenCIWithAnApprovalAndNoFeedbackIsReadyToMerge(t *testing.T) {
 	if len(PendingActions(next)) != 0 {
 		t.Errorf("READY_TO_MERGE Woke Claude: %+v", PendingActions(next))
 	}
-	if again, actions := Reconcile(next, []Event{approved}); len(actions) != 0 || !reflect.DeepEqual(again, next) {
+	if again, actions := Reconcile(next, []Event{green}); len(actions) != 0 || !reflect.DeepEqual(again, next) {
 		t.Errorf("re-observing changed READY_TO_MERGE: %+v", actions)
 	}
 }
 
 func TestPRLifecycleStates(t *testing.T) {
-	approved := func(e Event) Event { e.Approved = true; return e }
+	changesRequested := func(e Event) Event { e.ChangesRequested = true; return e }
 	running := ciEvent("aaa", false, false)
-	running.QuietPeriod, running.Approved = quiet, true
+	running.QuietPeriod = quiet
 
 	for _, tc := range []struct {
 		name  string
@@ -122,14 +123,15 @@ func TestPRLifecycleStates(t *testing.T) {
 		event Event
 		want  ItemState
 	}{
-		{"green, not approved", WaitingForCI, observed("aaa", t1), WaitingForReview},
+		{"green, no feedback", WaitingForCI, observed("aaa", t1), ReadyToMerge},
+		{"green, changes requested", WaitingForCI, changesRequested(observed("aaa", t1)), WaitingForReview},
 		{"still running", WaitingForCI, running, WaitingForCI},
-		{"approved while waiting for review", WaitingForReview, approved(observed("aaa", t1)), ReadyToMerge},
-		{"approval withdrawn", ReadyToMerge, observed("aaa", t1), WaitingForReview},
-		{"new head while ready", ReadyToMerge, approved(observed("bbb", t1)), WaitingForCI},
+		{"change request cleared while waiting for review", WaitingForReview, observed("aaa", t1), ReadyToMerge},
+		{"changes requested while ready", ReadyToMerge, changesRequested(observed("aaa", t1)), WaitingForReview},
+		{"new head while ready", ReadyToMerge, observed("bbb", t1), WaitingForCI},
 		{"new head while waiting for review", WaitingForReview, observed("bbb", t1), WaitingForCI},
 		{"new head while addressing feedback", AddressingFeedback, observed("bbb", t1), WaitingForCI},
-		{"green while addressing feedback", AddressingFeedback, approved(observed("aaa", t1)), AddressingFeedback},
+		{"green while addressing feedback", AddressingFeedback, observed("aaa", t1), AddressingFeedback},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			item := waitingForCI("aaa")
@@ -152,7 +154,6 @@ func TestNewFeedbackAfterReadyToMergeWakes(t *testing.T) {
 	item := waitingForCI("aaa")
 	item.State = ReadyToMerge
 	e := observed("aaa", t1, review("R2", t1))
-	e.Approved = true
 
 	next, _ := Reconcile(State{Items: []WorkItem{item}}, []Event{e})
 
@@ -206,7 +207,7 @@ func TestAFailingReRunTakesTheItemOutOfReadyToMerge(t *testing.T) {
 	item := waitingForCI("aaa")
 	item.State = ReadyToMerge
 	e := observed("aaa", t1)
-	e.Approved, e.Failed = true, true
+	e.Failed = true
 
 	next, _ := Reconcile(State{Items: []WorkItem{item}}, []Event{e})
 

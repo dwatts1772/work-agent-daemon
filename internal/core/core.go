@@ -224,7 +224,7 @@ func (d *Daemon) observePRStatus(ctx context.Context, st workflow.State, now tim
 		events = append(events, workflow.Event{
 			Type: workflow.PRObserved, Repo: w.Repo, Issue: w.Issue, Title: w.Title, URL: w.IssueURL,
 			PR: w.PR, PRURL: w.PRURL, HeadSHA: s.HeadSHA, Settled: s.Settled, Failed: s.Failed,
-			Feedback: feedback, Approved: s.Approved, QuietPeriod: d.cfg.QuietPeriod(), ObservedAt: now,
+			Feedback: feedback, ChangesRequested: s.ChangesRequested, QuietPeriod: d.cfg.QuietPeriod(), ObservedAt: now,
 		})
 	}
 	return events

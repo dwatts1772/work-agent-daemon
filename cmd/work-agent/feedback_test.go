@@ -51,8 +51,8 @@ func linkedAndGreen(t *testing.T, c *cli) string {
 	c.mustTick(t)
 	haveTranscript(t, c)
 	c.mustTick(t)
-	if got := c.item(t, "org/a#1"); got.State != workflow.WaitingForReview {
-		t.Fatalf("org/a#1 = %s, want WAITING_FOR_REVIEW: CI green, no approval yet", got.State)
+	if got := c.item(t, "org/a#1"); got.State != workflow.ReadyToMerge {
+		t.Fatalf("org/a#1 = %s, want READY_TO_MERGE: CI green, no actionable feedback", got.State)
 	}
 	return c.item(t, "org/a#1").Workspace.ClaudeSessionID
 }
@@ -133,8 +133,8 @@ func TestFeedbackFromAuthorsWithoutWriteAccessNeverWakes(t *testing.T) {
 	if got := feedbackWakes(t, c); len(got) != 0 {
 		t.Errorf("Woke %q for feedback that does not count", got)
 	}
-	if got := c.item(t, "org/a#1"); got.State != workflow.WaitingForReview {
-		t.Errorf("org/a#1 = %s, want WAITING_FOR_REVIEW", got.State)
+	if got := c.item(t, "org/a#1"); got.State != workflow.ReadyToMerge {
+		t.Errorf("org/a#1 = %s, want READY_TO_MERGE: none of it is actionable", got.State)
 	}
 }
 
@@ -158,19 +158,13 @@ func TestThePRLifecycleReachesReadyToMergeAndRegressesOnANewHead(t *testing.T) {
 		t.Fatalf("org/a#1 = %s, want WAITING_FOR_CI while checks run", got.State)
 	}
 
+	// A solo Operator: green CI and nobody to approve or comment (#37).
 	c.stubs.SetFixture(t, withFeedback("aaa", nil))
-	if stdout := c.mustTick(t); !strings.Contains(stdout, "CI_PASSED\torg/a#1\tWAITING_FOR_REVIEW") {
-		t.Errorf("stdout does not report the move to WAITING_FOR_REVIEW:\n%s", stdout)
-	}
-
-	approval := []testharness.Review{reviewBy("PRR_1", "alice", "OWNER", "APPROVED")}
-	c.stubs.SetFixture(t, withFeedback("aaa", approval))
-	c.mustTick(t)
-	if got := c.item(t, "org/a#1"); got.State != workflow.ReadyToMerge {
-		t.Fatalf("org/a#1 = %s, want READY_TO_MERGE once approved with CI green", got.State)
+	if stdout := c.mustTick(t); !strings.Contains(stdout, "CI_PASSED\torg/a#1\tREADY_TO_MERGE") {
+		t.Fatalf("stdout does not report the move to READY_TO_MERGE without an approval:\n%s", stdout)
 	}
 	if got := feedbackWakes(t, c); len(got) != 0 {
-		t.Errorf("an approval Woke Claude: %q", got)
+		t.Errorf("READY_TO_MERGE Woke Claude: %q", got)
 	}
 	for _, call := range c.stubs.Calls(t) {
 		if call.Bin == "gh" && slices.Contains(call.Args, "merge") {
@@ -183,5 +177,33 @@ func TestThePRLifecycleReachesReadyToMergeAndRegressesOnANewHead(t *testing.T) {
 	c.mustTick(t)
 	if got := c.item(t, "org/a#1"); got.State != workflow.WaitingForCI || got.HeadSHA != "bbb" {
 		t.Errorf("org/a#1 = %s at %q after a push, want WAITING_FOR_CI at bbb", got.State, got.HeadSHA)
+	}
+}
+
+func TestAStandingChangeRequestHoldsReadyToMergeUntilItsReviewerApproves(t *testing.T) {
+	c := newCLI(t, withFeedback("aaa", nil))
+	linkedAndGreen(t, c)
+
+	changes := reviewBy("PRR_1", "alice", "MEMBER", "CHANGES_REQUESTED")
+	c.stubs.SetFixture(t, withFeedback("aaa", []testharness.Review{changes}))
+	c.mustTick(t)
+	if got := c.item(t, "org/a#1"); got.State != workflow.AddressingFeedback {
+		t.Fatalf("org/a#1 = %s, want ADDRESSING_FEEDBACK for the change request", got.State)
+	}
+
+	// Claude pushes a fix and CI goes green; alice has not re-reviewed.
+	c.stubs.SetFixture(t, withFeedback("bbb", []testharness.Review{changes}))
+	c.mustTick(t)
+	if got := c.item(t, "org/a#1"); got.State != workflow.WaitingForReview {
+		t.Fatalf("org/a#1 = %s, want WAITING_FOR_REVIEW while alice's change request stands", got.State)
+	}
+
+	c.stubs.SetFixture(t, withFeedback("bbb", []testharness.Review{changes, reviewBy("PRR_2", "alice", "MEMBER", "APPROVED")}))
+	c.mustTick(t)
+	if got := c.item(t, "org/a#1"); got.State != workflow.ReadyToMerge {
+		t.Errorf("org/a#1 = %s, want READY_TO_MERGE once alice approves", got.State)
+	}
+	if got := feedbackWakes(t, c); len(got) != 1 {
+		t.Errorf("Wakes = %q, want exactly one for the change request", got)
 	}
 }
