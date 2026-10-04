@@ -83,16 +83,21 @@ func TestAChangeRequestStandsUntilItsReviewerApprovesOrItIsDismissed(t *testing.
 		reviews []Review
 		want    bool
 	}{
-		"no reviews":                    {nil, false},
-		"approved":                      {[]Review{r("alice", "OWNER", "APPROVED")}, false},
-		"changes requested":             {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED")}, true},
-		"approved after changes":        {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "APPROVED")}, false},
-		"a comment keeps the request":   {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "COMMENTED")}, true},
-		"changes after approval":        {[]Review{r("alice", "OWNER", "APPROVED"), r("alice", "OWNER", "CHANGES_REQUESTED")}, true},
-		"another reviewer objects":      {[]Review{r("alice", "OWNER", "APPROVED"), r("bob", "MEMBER", "CHANGES_REQUESTED")}, true},
-		"change request dismissed":      {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "DISMISSED")}, false},
-		"drive-by change request":       {[]Review{r("eve", "NONE", "CHANGES_REQUESTED")}, false},
-		"the Operator's change request": {[]Review{r("op", "OWNER", "CHANGES_REQUESTED")}, false},
+		"no reviews":                  {nil, false},
+		"approved":                    {[]Review{r("alice", "OWNER", "APPROVED")}, false},
+		"changes requested":           {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED")}, true},
+		"approved after changes":      {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "APPROVED")}, false},
+		"a comment keeps the request": {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "COMMENTED")}, true},
+		"changes after approval":      {[]Review{r("alice", "OWNER", "APPROVED"), r("alice", "OWNER", "CHANGES_REQUESTED")}, true},
+		"another reviewer objects":    {[]Review{r("alice", "OWNER", "APPROVED"), r("bob", "MEMBER", "CHANGES_REQUESTED")}, true},
+		// GitHub rewrites a dismissed review's state in place, to a review
+		// comment (docs: "Dismissing a pull request review"): it carries no
+		// verdict, so the author's previous verdict stands again.
+		"change request dismissed":                   {[]Review{r("alice", "OWNER", "DISMISSED")}, false},
+		"approval over a change request dismissed":   {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), r("alice", "OWNER", "DISMISSED")}, true},
+		"the later of two change requests dismissed": {[]Review{r("alice", "OWNER", "CHANGES_REQUESTED"), {ID: "r2", Author: "alice", AuthorAssociation: "OWNER", State: "DISMISSED", SubmittedAt: at}}, true},
+		"drive-by change request":                    {[]Review{r("eve", "NONE", "CHANGES_REQUESTED")}, false},
+		"the Operator's change request":              {[]Review{r("op", "OWNER", "CHANGES_REQUESTED")}, false},
 	} {
 		if _, got := Triage("op", nil, tc.reviews, nil); got != tc.want {
 			t.Errorf("%s: changes requested = %v, want %v", name, got, tc.want)

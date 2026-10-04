@@ -59,6 +59,10 @@ _Avoid_: blocked, suspended
 A Wake the daemon has decided on but deferred — because the agent is working, the Workspace's backend is unavailable, no capacity slot is free, or a Quiet Period has not elapsed. It is retried on a later Tick, never dropped.
 _Avoid_: queued wake, pending wake
 
+**Ready to Merge**:
+An Owned Issue whose PR has Settled green CI, no actionable feedback and no standing change request: the hand-off to the Operator, who marks the draft PR ready, gets whatever review branch protection asks for, and merges. It needs no approval and is not a merge permission; the daemon never merges. The Operator is notified only once the Workspace's agent stops working.
+_Avoid_: approved, mergeable, done
+
 **Settled**:
 The CI state of a head commit once every check for it has concluded, pass or fail.
 _Avoid_: finished, done (for CI)

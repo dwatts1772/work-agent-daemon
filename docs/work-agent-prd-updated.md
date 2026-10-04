@@ -701,7 +701,7 @@ Resolved during design (previously open questions):
 16. **Language and shell** — Go core, Wails v3 tray app + headless CLI, start at login (ADR-0004).
 17. **Feedback authors** — only write-access reviewers or configured bots can trigger a feedback Wake.
 18. **Prior art** — `coding-agent-loop` is a design reference only; it is unlicensed, so no code is copied.
-19. **No approval for `READY_TO_MERGE`** — green, Settled CI with no actionable feedback and no standing change request is `READY_TO_MERGE`; no approval is required, even where branch protection requires reviews. The PR is a draft only the Operator marks ready, so `READY_TO_MERGE` is the hand-off to the Operator, not a merge; GitHub enforces branch protection at merge (#37).
+19. **No approval for `READY_TO_MERGE`** — green, Settled CI with no actionable feedback and no standing change request is `READY_TO_MERGE`; no approval is required, even where branch protection requires reviews. The PR is a draft only the Operator marks ready, so `READY_TO_MERGE` is the hand-off to the Operator, not a merge; GitHub enforces branch protection at merge. An approval requirement for team repos belongs to the "approval policy" listed under §8 Future configuration. The `READY_TO_MERGE` notification is held while the Workspace's agent is `working`, since Claude may still be pushing to the draft (#37).
 
 ## 22. Guiding principles
 

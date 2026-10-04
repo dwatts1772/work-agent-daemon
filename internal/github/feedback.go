@@ -40,8 +40,10 @@ type Feedback struct {
 // bots count, and never the Operator, whose account Claude itself comments
 // as. A submitted review counts when it comments or requests changes; a
 // comment counts when it says something outside quoted text and code
-// fences. A change request stands while it is the latest verdict (approval,
-// change request or dismissal) of a counted author.
+// fences. A change request stands while it is the latest verdict (approval
+// or change request) of a counted author. GitHub turns a dismissed review
+// into a review comment, in place, so it carries no verdict: dismissing an
+// approval over a change request leaves the change request standing.
 func Triage(operator string, bots []string, reviews []Review, comments []Comment) (feedback []Feedback, changesRequested bool) {
 	allowed := func(author, association string) bool {
 		if strings.EqualFold(author, operator) {
@@ -70,7 +72,7 @@ func Triage(operator string, bots []string, reviews []Review, comments []Comment
 			if state == "CHANGES_REQUESTED" {
 				verdicts[strings.ToLower(r.Author)] = state
 			}
-		case "APPROVED", "DISMISSED":
+		case "APPROVED":
 			verdicts[strings.ToLower(r.Author)] = state
 		}
 	}

@@ -188,3 +188,53 @@ func TestAnAgentStillWaitingAfterAnOrcaOutageIsNotNotifiedAgain(t *testing.T) {
 	n.expect(notify.AgentWaiting, "org/a#1", 1)
 	n.expect(notify.OrcaUnavailable, "", 1)
 }
+
+// A draft PR whose CI Settles green between Claude's pushes is
+// READY_TO_MERGE, but the Operator is told only once the agent stops
+// working on it (#37).
+func TestReadyToMergeIsHeldWhileTheAgentIsWorking(t *testing.T) {
+	n := newNotified(t, testharness.Fixture{Issues: eligible(), Orca: orcaUp()})
+	n.tick() // creates the Workspace and Wakes Claude
+	agent := func(state string) {
+		n.set(func(fx *testharness.Fixture) { fx.Orca.AgentStates = map[string][]string{"issue-1": {state}} })
+	}
+	agent("working")
+	n.set(func(fx *testharness.Fixture) {
+		fx.PullRequests = map[string][]testharness.PullRequest{"org/a": {{
+			Number: 60, State: "OPEN", HeadRefName: "issue-1", Body: "Work on the issue.", Author: operator,
+			HeadSHA: "aaa", Checks: []testharness.Check{{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"}},
+		}}}
+	})
+	n.tick()
+	n.tick()
+	if got := n.item("org/a#1"); got.State != workflow.ReadyToMerge {
+		t.Fatalf("org/a#1 = %s, want READY_TO_MERGE", got.State)
+	}
+	n.expect(notify.ReadyToMerge, "org/a#1", 0)
+
+	agent("idle")
+	n.tick()
+	n.expect(notify.ReadyToMerge, "org/a#1", 1)
+
+	// Back to work and done again on the same head: told once, not twice.
+	agent("working")
+	n.tick()
+	agent("idle")
+	n.tick()
+	n.expect(notify.ReadyToMerge, "org/a#1", 1)
+}
+
+func (n *notified) item(id string) workflow.WorkItem {
+	n.t.Helper()
+	store, err := state.Open(n.stateDir)
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	defer store.Close()
+	st, err := store.Load()
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	w, _ := st.Item(id)
+	return w
+}
